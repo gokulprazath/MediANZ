@@ -1,0 +1,11 @@
+{
+  "place_id": "sample-place-kedron",
+  "rating": 3.9,
+  "review_count": 507,
+  "reviews": [
+    "Modern facilities and clear signs.",
+    "Long wait at admissions.",
+    "My surgery went well and the nurses managed my pain."
+  ],
+  "maps_url": "https://www.google.com/maps/place/?q=place_id:sample-place-kedron"
+}

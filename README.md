@@ -3,7 +3,7 @@
 ## Repository structure
 
 ```
-health-app/
+MediANZ/
 ├── README.md
 ├── .env                                  # your secrets (never commit; see docs/MCP_BUILD_SPEC.md §11)
 ├── docs/
@@ -40,9 +40,24 @@ Skip any you have already run.
 | 4 | `seed/01_sample_data.sql` | Sample people, clinics, plans, visits, transcripts, ratings, claims |
 | 5 | `seed/02_link_test_logins.sql` | First create the test logins it lists (Authentication → Users → Add user, tick Auto Confirm), then run it. Re-run whenever you add more test logins. |
 | 6 | `seed/03_sample_vitals.sql` | Sample vitals for past visits |
+| 7 | `migrations/20261027000000_agent_layer.sql` | Agent layer part 1: AI-consent versions, transcript segments, decision/field/model registries, draft facts, open items, GP queries, deletion cascade, human-only review functions, append-only agent logs, `mcp_server` role |
+| 8 | `migrations/20261027010000_agent_layer_booking_matching.sql` | Agent layer part 2: booking proposals, GP matching data, fee schedules, insurance plan versions, review summaries, `find_gp_candidates`, `estimate_fees` |
+| 9 | `seed/04_agent_layer_sample.sql` | Sample agent-layer data: questions, fields, mock engines on, clinician languages, preferences, fees, plan versions, scores, review summaries; moves Olivia's approved transcript consents to `v2` (safe to re-run) |
 
-Files 4–6 are sample data: use them only in a development project, never in
+Files 4–6 and 9 are sample data: use them only in a development project, never in
 the project that will hold real patients.
+
+## MCP servers (Python, work in progress)
+
+```
+uv sync
+make test              # offline: no network, database or API keys
+make lint              # ruff + mypy (strict)
+make test-integration  # database tests against the dev project (rolled back)
+```
+
+Configuration: copy `.env.example` to `.env`. Build notes and assumptions are in
+`docs/MCP_BUILD_SPEC.md` and `docs/DECISIONS.md`.
 
 ## Edge Function
 

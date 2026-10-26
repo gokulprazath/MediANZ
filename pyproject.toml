@@ -1,0 +1,73 @@
+[project]
+name = "healthmcp"
+version = "0.1.0"
+description = "MCP servers for the health booking app"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mcp>=1.9",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
+    "pyjwt[crypto]>=2.8",
+    "httpx>=0.27",
+    "starlette>=0.37",
+    "uvicorn>=0.30",
+    "jsonschema>=4.22",
+    "openai>=1.40",
+    "tavily-python>=0.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-jsonschema",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/healthmcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: needs the hosted development project (skipped unless RUN_INTEGRATION=1)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF", "SIM"]
+ignore = [
+    "S101",   # assert is fine in tests
+    "UP046",  # classic Generic[...] / TypeVar style is fine
+    "UP047",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "S311", "S608", "E501"]  # long fixed SQL strings in tests
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["healthmcp"]
+
+[[tool.mypy.overrides]]
+module = "healthmcp.*"
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["tavily.*"]
+ignore_missing_imports = true

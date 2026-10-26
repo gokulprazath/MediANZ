@@ -1,0 +1,10 @@
+{
+  "place_id": "sample-place-paddington",
+  "rating": 4.2,
+  "review_count": 138,
+  "reviews": [
+    "Central location and a helpful front desk.",
+    "Parking nearby is limited, so allow extra time."
+  ],
+  "maps_url": "https://www.google.com/maps/place/?q=place_id:sample-place-paddington"
+}

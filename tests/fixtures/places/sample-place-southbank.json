@@ -1,0 +1,11 @@
+{
+  "place_id": "sample-place-southbank",
+  "rating": 4.6,
+  "review_count": 212,
+  "reviews": [
+    "Reception staff were friendly and booking online was easy.",
+    "Clean waiting room, though Monday morning was busy.",
+    "The doctor changed my blood pressure tablets and I feel much better."
+  ],
+  "maps_url": "https://www.google.com/maps/place/?q=place_id:sample-place-southbank"
+}

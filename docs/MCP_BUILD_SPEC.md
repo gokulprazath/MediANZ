@@ -584,7 +584,7 @@ Implementation notes:
 #   Project Settings -> API Keys      (URL, anon/publishable key, service_role/secret key)
 #   Project Settings -> JWT Keys      (legacy JWT secret, only if the project still uses HS256)
 #   Connect -> Session pooler         (DATABASE_URL, with your database password)
-SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_URL=https://buvnxqkjgdryrqdyuuou.supabase.co
 SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_JWT_SECRET=

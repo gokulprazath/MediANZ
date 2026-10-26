@@ -1,0 +1,10 @@
+{
+  "place_id": "sample-place-parramatta",
+  "rating": 4.4,
+  "review_count": 96,
+  "reviews": [
+    "Short waiting times and multilingual staff.",
+    "Close to the train station."
+  ],
+  "maps_url": "https://www.google.com/maps/place/?q=place_id:sample-place-parramatta"
+}

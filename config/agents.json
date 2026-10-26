@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "agents": {
+    "patient-assistant": {
+      "description": "Runs in the patient app as the signed-in patient (user mode).",
+      "modes": ["user"],
+      "servers": {
+        "patient_record": [
+          "get_approved_facts",
+          "get_observations",
+          "get_eligibility",
+          "get_appointments",
+          "log_note"
+        ],
+        "matching": [
+          "get_patient_gp_preferences",
+          "find_gp_candidates",
+          "get_score_breakdown",
+          "get_fees",
+          "get_plan_coverage",
+          "get_facility_review_summary",
+          "log_note"
+        ],
+        "booking": [
+          "get_available_slots",
+          "hold_slot",
+          "propose_booking",
+          "propose_cancellation",
+          "propose_reschedule",
+          "get_proposal_status",
+          "log_note"
+        ]
+      }
+    },
+    "clinical-doc-agent": {
+      "description": "Background job after a patient approves a transcript (job mode).",
+      "modes": ["job"],
+      "servers": {
+        "transcript": [
+          "get_processing_eligibility",
+          "get_transcript_windows",
+          "search_transcript",
+          "check_grounding",
+          "log_note"
+        ],
+        "decision": [
+          "decide_batch",
+          "decide_yes_no",
+          "decide_choice",
+          "decide_score",
+          "log_note"
+        ],
+        "extraction": [
+          "extract_value",
+          "save_draft_fact",
+          "raise_open_item",
+          "create_gp_query",
+          "list_open_items",
+          "get_clinician_preferences",
+          "log_note"
+        ],
+        "patient_record": [
+          "get_approved_facts",
+          "get_observations",
+          "get_eligibility",
+          "get_appointments",
+          "log_note"
+        ]
+      }
+    },
+    "research-job": {
+      "description": "Scheduled jobs that refresh insurance coverage and clinic reviews (job mode).",
+      "modes": ["job"],
+      "servers": {
+        "web_research": [
+          "import_phio_dataset",
+          "refresh_plan_coverage",
+          "refresh_facility_reviews",
+          "web_search",
+          "web_extract",
+          "log_note"
+        ]
+      }
+    }
+  }
+}
