@@ -81,6 +81,45 @@
           "log_note"
         ]
       }
+    },
+    "explainer": {
+      "description": "Patient-facing explanations of matching scores and fees (user mode, read-only).",
+      "modes": ["user"],
+      "servers": {
+        "matching": ["get_score_breakdown", "get_fees"]
+      }
+    },
+    "extractor": {
+      "description": "Transcript extraction job: drafts facts and open items, never approves or writes final facts (job mode).",
+      "modes": ["job"],
+      "servers": {
+        "transcript": ["get_transcript_windows", "check_grounding"],
+        "decision": ["decide_yes_no", "decide_choice", "decide_score"],
+        "extraction": ["extract_value", "save_draft_fact", "list_open_items"]
+      }
+    },
+    "insights": {
+      "description": "Patient-facing health insights over approved facts (user mode, read-only plus GP-query approval request).",
+      "modes": ["user"],
+      "servers": {
+        "patient_record": ["get_approved_facts", "get_observations", "get_appointments"],
+        "matching": ["get_patient_gp_preferences"]
+      }
+    },
+    "insurance": {
+      "description": "Patient-facing insurance lookup: fees, coverage and allowlisted web research (user mode, read-only).",
+      "modes": ["user"],
+      "servers": {
+        "matching": ["get_fees", "get_plan_coverage"],
+        "web_research": ["web_search", "web_extract"]
+      }
+    },
+    "insights-writer": {
+      "description": "Internal code-only writer used after the patient approves a GP query (job mode).",
+      "modes": ["job"],
+      "servers": {
+        "extraction": ["create_gp_query"]
+      }
     }
   }
 }

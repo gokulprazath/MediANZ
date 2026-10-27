@@ -40,6 +40,18 @@ class Settings(BaseSettings):
 
     allowed_research_domains: str = DEFAULT_RESEARCH_DOMAINS
 
+    # Agent layer (LangGraph + MCP gateway). The LLM is optional: endpoints return 503
+    # until one is configured, and tests inject a model.
+    agent_gateway_url: str = "http://127.0.0.1:3100/mcp"
+    agent_gateway_timeout_seconds: float = Field(default=30.0, gt=0)
+    agent_llm_base_url: str = ""
+    agent_llm_api_key: SecretStr | None = None
+    agent_llm_model: str = ""
+    agent_llm_temperature: float = Field(default=0.0, ge=0, le=2)
+    agent_max_steps: int = Field(default=8, ge=1, le=20)
+    agent_action_ttl_seconds: int = Field(default=300, ge=30, le=900)
+    agent_port: int = Field(default=3108, ge=1, le=65535)
+
     # Runtime
     data_backend: Literal["pg", "fake"] = "pg"
     agents_config_path: Path = Path("config/agents.json")
@@ -64,6 +76,18 @@ class Settings(BaseSettings):
             for d in self.allowed_research_domains.split(",")
             if d.strip()
         )
+
+    @property
+    def agent_model(self) -> str:
+        return self.agent_llm_model or self.slm_model
+
+    @property
+    def agent_base_url(self) -> str:
+        return self.agent_llm_base_url or self.slm_base_url
+
+    @property
+    def agent_api_key(self) -> SecretStr | None:
+        return self.agent_llm_api_key or self.slm_api_key
 
     @property
     def supabase_issuer(self) -> str | None:

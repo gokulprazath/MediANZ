@@ -94,7 +94,7 @@ SERVERS: dict[str, ServerSpec] = {
         _spec(
             "web_research",
             3107,
-            {"job"},
+            {"user", "job"},
             {
                 "import_phio_dataset",
                 "refresh_plan_coverage",

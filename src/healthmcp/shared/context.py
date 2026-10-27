@@ -171,3 +171,7 @@ class AgentAllowlist:
     def allowed_tools(self, agent_id: str, server: str) -> frozenset[str]:
         entry = self._agents.get(agent_id)
         return entry.servers.get(server, frozenset()) if entry else frozenset()
+
+    def servers_for(self, agent_id: str) -> Mapping[str, frozenset[str]]:
+        entry = self._agents.get(agent_id)
+        return entry.servers if entry else {}

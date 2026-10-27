@@ -1,4 +1,4 @@
-.PHONY: sync test test-integration lint format typecheck token db-reset
+.PHONY: sync test test-integration lint format typecheck gateway agent research token db-reset
 
 sync:
 	uv sync
@@ -23,6 +23,15 @@ format:
 
 typecheck:
 	uv run mypy
+
+gateway:
+	uv run python -m healthmcp.gateway
+
+agent:
+	uv run python -m healthmcp.agent
+
+research:
+	uv run python -m healthmcp.discovery.research_job $(ARGS)
 
 # Example: make token AGENT=clinical-doc-agent APPOINTMENT=60000000-0000-4000-8000-000000000002
 token:

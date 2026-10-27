@@ -46,7 +46,16 @@ def test_settings_ignore_dotenv_when_disabled(
 
 
 def test_allowlist_matches_spec(allowlist: AgentAllowlist) -> None:
-    assert allowlist.agent_ids == {"patient-assistant", "clinical-doc-agent", "research-job"}
+    assert allowlist.agent_ids == {
+        "patient-assistant",
+        "clinical-doc-agent",
+        "research-job",
+        "explainer",
+        "extractor",
+        "insights",
+        "insurance",
+        "insights-writer",
+    }
     expected = {
         "patient-assistant": {"patient_record", "matching", "booking"},
         "clinical-doc-agent": {"transcript", "decision", "extraction", "patient_record"},
@@ -57,9 +66,32 @@ def test_allowlist_matches_spec(allowlist: AgentAllowlist) -> None:
         assert set(data["agents"][agent]["servers"]) == servers
         for server in servers:
             tools = set(data["agents"][agent]["servers"][server])
-            # Every agent gets every spec tool of its servers, plus log_note.
+            # These broad agents predate the least-privilege agent roles.
             assert tools == SERVERS[server].tools, (agent, server)
             assert LOG_NOTE in tools
+
+    least_privilege = {
+        "explainer": {"matching": {"get_score_breakdown", "get_fees"}},
+        "extractor": {
+            "transcript": {"get_transcript_windows", "check_grounding"},
+            "decision": {"decide_yes_no", "decide_choice", "decide_score"},
+            "extraction": {"extract_value", "save_draft_fact", "list_open_items"},
+        },
+        "insights": {
+            "patient_record": {"get_approved_facts", "get_observations", "get_appointments"},
+            "matching": {"get_patient_gp_preferences"},
+        },
+        "insurance": {
+            "matching": {"get_fees", "get_plan_coverage"},
+            "web_research": {"web_search", "web_extract"},
+        },
+        "insights-writer": {"extraction": {"create_gp_query"}},
+    }
+    for agent, servers in least_privilege.items():
+        assert {
+            name: set(tools) for name, tools in data["agents"][agent]["servers"].items()
+        } == servers
+        assert LOG_NOTE not in {tool for tools in servers.values() for tool in tools}
 
 
 def test_allowlist_rejects_unknown_tools() -> None:
