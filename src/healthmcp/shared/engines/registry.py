@@ -9,6 +9,11 @@ Callers state whether the call will carry patient-derived text
 (`health_data=True`); the selected engine must then have
 allow_health_data = true, otherwise HealthDataNotAllowed is raised before
 anything is sent.
+
+`decision_review` is the SLM answering decision questions: explain questions,
+and a second opinion when the decision engine (Jev) is not confident. It is
+an explicit step, not a fallback, and it uses the enabled extraction entry, so
+the same health-data approval applies.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from healthmcp.shared.engines.decision import (
     JevEngine,
     LlmAdapterEngine,
     MockDecisionEngine,
+    SlmDecisionEngine,
 )
 from healthmcp.shared.engines.extraction import (
     ExtractionEngine,
@@ -53,6 +59,12 @@ FACTORIES: Mapping[str, tuple[Capability, Factory]] = {
     "mock_places": ("places", MockPlacesClient),
 }
 
+# Enabled extraction engine -> its decision-question implementation.
+REVIEW_FACTORIES: Mapping[str, Factory] = {
+    "slm": SlmDecisionEngine,
+    "mock_extraction": MockDecisionEngine,
+}
+
 
 @dataclass(frozen=True)
 class Selected(Generic[E]):
@@ -66,27 +78,43 @@ class EngineRegistry:
         settings: Settings,
         registry: ModelRegistryRepository,
         factories: Mapping[str, tuple[Capability, Factory]] = FACTORIES,
+        review_factories: Mapping[str, Factory] = REVIEW_FACTORIES,
     ) -> None:
         self._settings = settings
         self._registry = registry
         self._factories = factories
-        self._instances: dict[tuple[str, str], Any] = {}
+        self._review_factories = review_factories
+        self._instances: dict[tuple[str, str, str], Any] = {}
 
-    async def _select(self, capability: Capability, *, health_data: bool) -> Selected[Any]:
+    async def _enabled(self, capability: Capability, *, health_data: bool) -> EngineEntry:
         entries = await self._registry.enabled_for(capability)
         if len(entries) != 1:
             raise EngineNotConfigured()
         entry = entries[0]
         if health_data and not entry.allow_health_data:
             raise HealthDataNotAllowed()
+        return entry
+
+    def _instance(self, role: str, entry: EngineEntry, factory: Factory) -> Selected[Any]:
+        key = (role, entry.engine, entry.model_version)
+        if key not in self._instances:
+            # A constructor raises EngineNotConfigured when its keys are missing.
+            self._instances[key] = factory(entry, self._settings)
+        return Selected(self._instances[key], entry)
+
+    async def _select(self, capability: Capability, *, health_data: bool) -> Selected[Any]:
+        entry = await self._enabled(capability, health_data=health_data)
         spec = self._factories.get(entry.engine)
         if spec is None or spec[0] != capability:
             raise EngineNotConfigured()
-        key = (entry.engine, entry.model_version)
-        if key not in self._instances:
-            # A constructor raises EngineNotConfigured when its keys are missing.
-            self._instances[key] = spec[1](entry, self._settings)
-        return Selected(self._instances[key], entry)
+        return self._instance(capability, entry, spec[1])
+
+    async def decision_review(self, *, health_data: bool) -> Selected[DecisionEngine]:
+        entry = await self._enabled("extraction", health_data=health_data)
+        factory = self._review_factories.get(entry.engine)
+        if factory is None:
+            raise EngineNotConfigured()
+        return cast(Selected[DecisionEngine], self._instance("review", entry, factory))
 
     async def decision(self, *, health_data: bool) -> Selected[DecisionEngine]:
         return cast(

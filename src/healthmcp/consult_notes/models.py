@@ -1,6 +1,7 @@
 """Records the consult-notes worker reads and writes. Ids, enums and hashes only:
 transcript text stays in the database and in engine calls, never in these records
-(except the structured fact value, which is what the clinician reviews)."""
+(except the structured fact value and an explain key point's text, which are what
+the clinician reviews)."""
 
 from __future__ import annotations
 
@@ -42,12 +43,24 @@ class DraftFact:
     idempotency_key: str
 
 
+AnswerSource = Literal["decision_engine", "slm"]
+
+
+@dataclass(frozen=True)
+class Opinion:
+    """The engine opinion that was not chosen as the suggested answer."""
+
+    answer: str
+    probability: float
+    engine: str
+
+
 @dataclass(frozen=True)
 class DraftKeyPoint:
     transcript_id: UUID
     question_id: str
     question_version: int
-    kind: Literal["yes_no", "choice", "score"]
+    kind: Literal["yes_no", "choice", "score", "explain"]
     answer: str
     answer_label: str | None
     level: int | None
@@ -58,6 +71,11 @@ class DraftKeyPoint:
     engine: str
     model_version: str
     idempotency_key: str
+    answer_source: AnswerSource = "decision_engine"
+    # Explain questions only: the SLM's explanation, which the clinician reviews
+    # (like a fact value). Never logged.
+    answer_text: str | None = None
+    other_opinion: Opinion | None = None
 
 
 @dataclass(frozen=True)

@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import json
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from healthmcp.shared.config import Settings
-from healthmcp.shared.engines.base import validated_call
-from healthmcp.shared.engines.decision import JevEngine, LlmAdapterEngine
+from healthmcp.shared.engines.base import check_answers, validated_call
+from healthmcp.shared.engines.decision import (
+    JevEngine,
+    LlmAdapterEngine,
+    SlmDecisionEngine,
+    jev_questions,
+)
 from healthmcp.shared.engines.extraction import OpenAICompatibleEngine
 from healthmcp.shared.engines.models import (
     ClinicalField,
@@ -350,14 +357,229 @@ async def test_none_or_two_enabled_is_not_configured(
         await engines.search()
 
 
-def test_jev_never_guesses_its_api(settings: Settings) -> None:
-    entry = _entry("jev")
+def test_jev_and_slm_decisions_need_keys(settings: Settings) -> None:
     with pytest.raises(EngineNotConfigured):
-        JevEngine(entry, settings)
+        JevEngine(_entry("jev"), settings)
     with pytest.raises(EngineNotConfigured):
-        JevEngine(entry, make_settings(jev_docs_path="/docs/jev"))
+        SlmDecisionEngine(_entry("slm"), settings)
     with pytest.raises(EngineNotConfigured):
         LlmAdapterEngine(_entry("llm_adapter"), settings)
+
+
+# ---------------------------------------------------------------------------
+# Jev (typesafe_sdk): questions built from decision_questions rows
+# ---------------------------------------------------------------------------
+EXPLAIN = TypedQuestion(
+    id="management_plan_summary",
+    version=1,
+    kind="explain",
+    text="What plan did the GP and patient agree?",
+    options=(),
+    threshold=0.7,
+)
+# A question that exists only as a row: nothing in the code knows about it.
+DIET = TypedQuestion(
+    id="diet_type",
+    version=2,
+    kind="choice",
+    text="What diet does the patient follow?",
+    threshold=0.7,
+    options=(
+        QuestionOption(value="vegetarian", label="Vegetarian"),
+        QuestionOption(value="vegan", description="No animal products"),
+        QuestionOption(value="unclear"),
+    ),
+)
+# Score options stored out of order: Jev's positions must follow the levels.
+PAIN = TypedQuestion(
+    id="pain_severity",
+    version=1,
+    kind="score",
+    text="Pain?",
+    threshold=0.7,
+    options=(
+        QuestionOption(value="severe", level=2, description="Severe"),
+        QuestionOption(value="none", level=0, description="None"),
+        QuestionOption(value="mild", level=1, description="Mild"),
+    ),
+)
+
+
+def _choice(choice: str, probabilities: dict[str, float], confidence: float) -> Any:
+    return SimpleNamespace(choice=choice, probabilities=probabilities, confidence=confidence)
+
+
+def _score(probabilities: dict[int, float], confidence: float) -> Any:
+    return SimpleNamespace(score=0.0, probabilities=probabilities, confidence=confidence)
+
+
+class FakeTypeSafe:
+    def __init__(self, response: Any) -> None:
+        self.response = response
+        self.calls: list[dict[str, Any]] = []
+
+    async def system_one(self, *, state: Any, questions: Any) -> Any:
+        self.calls.append({"state": state, "questions": questions})
+        return self.response
+
+
+def _jev(response: Any) -> tuple[JevEngine, FakeTypeSafe]:
+    engine = JevEngine(_entry("jev"), make_settings(jev_api_key="test-key"))
+    fake = FakeTypeSafe(response)
+    engine._client = fake  # type: ignore[assignment]
+    return engine, fake
+
+
+def test_jev_questions_are_built_from_rows() -> None:
+    built = jev_questions([q_yes_no("chest_pain_reported"), DIET, PAIN])
+    assert set(built) == {"chest_pain_reported", "diet_type", "pain_severity"}
+    assert set(built["chest_pain_reported"].criteria) == {"yes", "no", "not_stated"}
+    assert built["diet_type"].instructions == DIET.text
+    assert dict(built["diet_type"].criteria) == {
+        "vegetarian": "Vegetarian",
+        "vegan": "No animal products",
+        "unclear": None,
+    }
+    assert list(built["pain_severity"].criteria) == ["None", "Mild", "Severe"]
+    with pytest.raises(ValueError):
+        jev_questions([EXPLAIN])
+
+
+async def test_jev_maps_answers_back_to_option_values() -> None:
+    response = SimpleNamespace(
+        choices={
+            "chest_pain_reported": _choice("yes", {"yes": 0.9, "no": 0.05}, 0.8),
+            "diet_type": _choice("vegan", {"vegan": 0.55, "vegetarian": 0.45}, 0.95),
+        },
+        scores={"pain_severity": _score({0: 0.1, 1: 0.2, 2: 0.7}, 0.9)},
+    )
+    engine, fake = _jev(response)
+    answers = await engine.decide([q_yes_no("chest_pain_reported"), DIET, PAIN], STATE)
+
+    got = {a.question_id: (a.answer, a.probability) for a in answers}
+    # The lower of the option probability and Jev's confidence.
+    assert got == {
+        "chest_pain_reported": ("yes", 0.8),
+        "diet_type": ("vegan", 0.55),
+        "pain_severity": ("severe", 0.7),
+    }
+    assert engine.info.model == "jev-latest"
+    assert fake.calls[0]["state"] == STATE
+
+
+async def test_jev_invalid_or_missing_answers_fail() -> None:
+    missing = SimpleNamespace(choices={}, scores={})
+    engine, _ = _jev(missing)
+    with pytest.raises(EngineFailure):
+        await engine.decide([q_yes_no("chest_pain_reported")], STATE)
+
+    outside = SimpleNamespace(choices={"diet_type": _choice("keto", {"keto": 0.9}, 0.9)}, scores={})
+    engine, fake = _jev(outside)
+    with pytest.raises(EngineFailure):
+        await engine.decide([DIET], STATE)
+    assert len(fake.calls) == 2  # retried once, then failed
+
+
+# ---------------------------------------------------------------------------
+# SLM decisions: explain questions and second opinions
+# ---------------------------------------------------------------------------
+class FakeChat:
+    def __init__(self, content: dict[str, Any]) -> None:
+        self.content = content
+        self.requests: list[dict[str, Any]] = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+    async def create(self, **request: Any) -> Any:
+        self.requests.append(request)
+        message = SimpleNamespace(content=json.dumps(self.content))
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def _slm(content: dict[str, Any]) -> tuple[SlmDecisionEngine, FakeChat]:
+    settings = make_settings(slm_base_url="https://slm.test/v1", slm_api_key="k", slm_model="m")
+    engine = SlmDecisionEngine(_entry("slm"), settings)
+    fake = FakeChat(content)
+    engine._client = fake
+    return engine, fake
+
+
+async def test_slm_answers_explain_and_option_questions() -> None:
+    engine, fake = _slm(
+        {
+            "management_plan_summary": {
+                "answer": "answered",
+                "probability": 0.8,
+                "text": " Iron supplement daily; repeat blood test in three months. ",
+            },
+            "diet_type": {"answer": "unclear", "probability": 0.9},
+        }
+    )
+    answers = {a.question_id: a for a in await engine.decide([EXPLAIN, DIET], STATE)}
+    assert answers["management_plan_summary"].text == (
+        "Iron supplement daily; repeat blood test in three months."
+    )
+    assert (answers["diet_type"].answer, answers["diet_type"].text) == ("unclear", None)
+
+    schema = fake.requests[0]["response_format"]["json_schema"]["schema"]
+    assert schema["properties"]["diet_type"]["properties"]["answer"]["enum"] == [
+        "unclear",
+        "vegan",
+        "vegetarian",
+    ]
+    assert "text" in schema["properties"]["management_plan_summary"]["properties"]
+    payload = json.loads(fake.requests[0]["messages"][1]["content"])
+    assert payload["transcript"] == STATE
+
+
+async def test_slm_explain_without_text_is_rejected() -> None:
+    engine, fake = _slm({"management_plan_summary": {"answer": "answered", "probability": 0.8}})
+    with pytest.raises(EngineFailure):
+        await engine.decide([EXPLAIN], STATE)
+    assert len(fake.requests) == 2
+
+
+def test_answer_text_rules() -> None:
+    check = check_answers([EXPLAIN, q_yes_no("fatigue_reported")])
+
+    def answers(explain: dict[str, Any], yes_no: dict[str, Any]) -> list[TypedAnswer]:
+        return [
+            TypedAnswer(question_id=EXPLAIN.id, question_version=1, probability=0.8, **explain),
+            TypedAnswer(
+                question_id="fatigue_reported", question_version=1, probability=0.8, **yes_no
+            ),
+        ]
+
+    check(answers({"answer": "answered", "text": "Rest"}, {"answer": "yes"}))
+    check(answers({"answer": "not_stated"}, {"answer": "no"}))
+    for explain, yes_no in (
+        ({"answer": "answered"}, {"answer": "yes"}),
+        ({"answer": "not_stated", "text": "x"}, {"answer": "yes"}),
+        ({"answer": "answered", "text": "Rest"}, {"answer": "yes", "text": "because"}),
+        ({"answer": "maybe", "text": "Rest"}, {"answer": "yes"}),
+    ):
+        with pytest.raises(ValueError):
+            check(answers(explain, yes_no))
+
+    with pytest.raises(ValidationError):
+        TypedQuestion(
+            id="x_summary", version=1, kind="explain", text="?", options=YES_NO, threshold=0.7
+        )
+
+
+async def test_decision_review_uses_the_extraction_entry(
+    engines: EngineRegistry, registry_repo: FakeModelRegistryRepository
+) -> None:
+    selected = await engines.decision_review(health_data=True)
+    assert selected.entry.engine == "mock_extraction"
+    assert type(selected.engine).__name__ == "MockDecisionEngine"
+
+    registry_repo.set("mock_extraction", enabled=False)
+    registry_repo.set("slm", enabled=True)
+    with pytest.raises(HealthDataNotAllowed):
+        await engines.decision_review(health_data=True)
+    registry_repo.set("slm", enabled=True, allow_health_data=True)
+    with pytest.raises(EngineNotConfigured):  # no SLM keys
+        await engines.decision_review(health_data=True)
 
 
 def test_real_engines_need_keys(settings: Settings) -> None:

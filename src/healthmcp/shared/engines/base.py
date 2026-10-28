@@ -53,7 +53,10 @@ async def validated_call(
 
 
 def check_answers(questions: Sequence[TypedQuestion]) -> Callable[[list[TypedAnswer]], None]:
-    """One answer per question, using only that question's allowed values."""
+    """One answer per question, using only that question's allowed values.
+
+    Explain answers carry text exactly when answered; no other answer has text.
+    """
 
     def check(answers: list[TypedAnswer]) -> None:
         by_id = {(q.id, q.version): q for q in questions}
@@ -63,6 +66,9 @@ def check_answers(questions: Sequence[TypedQuestion]) -> Callable[[list[TypedAns
             q = by_id.get(key)
             if q is None or key in seen or a.answer not in q.allowed_values:
                 raise ValueError("answer does not match its question")
+            has_text = bool(a.text and a.text.strip())
+            if has_text != (q.kind == "explain" and a.answer == "answered"):
+                raise ValueError("answer text does not match its question")
             seen.add(key)
         if seen != set(by_id):
             raise ValueError("missing answers")

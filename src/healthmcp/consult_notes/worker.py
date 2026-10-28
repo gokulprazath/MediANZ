@@ -71,6 +71,7 @@ async def run(
             PgAuditRepository(database),
             window_segments=settings.consult_notes_window_segments,
             concurrency=settings.consult_notes_concurrency,
+            review_below=settings.decision_review_below,
         )
         max_attempts = settings.consult_worker_max_attempts
         if appointment_id is not None:

@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     smoke_olivia_password: SecretStr | None = None
 
     # Engines (all optional: mock engines need none of these)
-    jev_api_url: str = ""
+    jev_api_url: str = ""  # optional TypeSafe base URL; empty uses the SDK default
     jev_api_key: SecretStr | None = None
-    jev_docs_path: str = ""
+    jev_model: str = "jev-latest"
     slm_base_url: str = ""
     slm_api_key: SecretStr | None = None
     slm_model: str = ""
@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     consult_notes_concurrency: int = Field(default=4, ge=1, le=32)
     consult_worker_poll_seconds: float = Field(default=10.0, gt=0, le=3600)
     consult_worker_max_attempts: int = Field(default=3, ge=1, le=10)
+    # Decision-engine answers below this probability also get the SLM's opinion (then the GP).
+    decision_review_below: float = Field(default=0.6, ge=0, le=1)
 
     # Runtime
     data_backend: Literal["pg", "fake"] = "pg"

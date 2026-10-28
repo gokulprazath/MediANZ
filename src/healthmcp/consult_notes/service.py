@@ -2,9 +2,14 @@
 
   SLM (extraction engine)   every active clinical_field, per window of segments,
                             into draft clinical_facts (grounded quote, hash only).
-  Jev (decision engine)     every active decision_question, per window, aggregated
-                            into one draft consult_key_point per question.
-                            Low-confidence answers and high urgency raise open_items.
+  Jev (decision engine)     every active yes_no / choice / score decision_question,
+                            per window, aggregated into one draft consult_key_point
+                            per question. Low-confidence answers and high urgency
+                            raise open_items.
+  SLM (decision_review)     a second opinion when Jev's answer is below
+                            decision_review_below (0.6); the more confident answer
+                            is suggested, the other is kept, and the GP is asked.
+                            Explain questions (free text) go to the SLM directly.
 
 The engines come from model_registry with health_data=True, so nothing is sent
 to an engine that is not approved for health data. Every engine call is logged
@@ -25,11 +30,13 @@ from typing import TypeVar
 from uuid import UUID
 
 from healthmcp.consult_notes.models import (
+    AnswerSource,
     ClaimedRun,
     DraftFact,
     DraftKeyPoint,
     DraftOpenItem,
     NoteResults,
+    Opinion,
     RunSummary,
 )
 from healthmcp.consult_notes.repository import ConsultNotesRepository
@@ -48,6 +55,7 @@ from healthmcp.shared.engines.registry import EngineRegistry, Selected
 from healthmcp.shared.errors import HealthMcpError
 from healthmcp.shared.logging import log_decision, sha256_hex
 from healthmcp.shared.repositories.audit import AuditRepository
+from healthmcp.shared.repositories.model_registry import EngineEntry
 
 logger = logging.getLogger("healthmcp.consult_notes")
 
@@ -164,6 +172,7 @@ class ConsultNotesWorker:
         *,
         window_segments: int = 20,
         concurrency: int = 4,
+        review_below: float = 0.6,
         agent_id: str = AGENT_ID,
     ) -> None:
         self._repo = repository
@@ -171,6 +180,7 @@ class ConsultNotesWorker:
         self._audit = audit
         self._window_segments = window_segments
         self._concurrency = concurrency
+        self._review_below = review_below
         self.agent_id = agent_id
 
     # -- contexts -----------------------------------------------------------
@@ -257,8 +267,7 @@ class ConsultNotesWorker:
         key_points: tuple[DraftKeyPoint, ...] = ()
         open_items: tuple[DraftOpenItem, ...] = ()
         if questions:
-            decision = await self._engines.decision(health_data=True)
-            key_points, open_items = await self._key_points(ctx, run, decision, questions, windows)
+            key_points, open_items = await self._key_points(ctx, run, questions, windows)
         return NoteResults(facts=facts, key_points=key_points, open_items=open_items)
 
     async def _bounded(self, calls: Sequence[Callable[[], Awaitable[T]]]) -> list[T]:
@@ -354,15 +363,18 @@ class ConsultNotesWorker:
             )
         return tuple(facts)
 
-    # -- Jev: key points --------------------------------------------------------
-    async def _key_points(
+    # -- decision questions: Jev, then the SLM where needed -------------------
+    async def _decide(
         self,
         ctx: Context,
         run: ClaimedRun,
         selected: Selected[DecisionEngine],
         questions: Sequence[TypedQuestion],
         windows: Sequence[Window],
-    ) -> tuple[tuple[DraftKeyPoint, ...], tuple[DraftOpenItem, ...]]:
+        *,
+        tool: str,
+    ) -> dict[tuple[str, int], list[Vote]]:
+        """Ask every window; the answers per question, with the window that gave each."""
         engine, entry = selected.engine, selected.entry
 
         def call(window: Window) -> Callable[[], Awaitable[tuple[Window, list[TypedAnswer]]]]:
@@ -373,7 +385,7 @@ class ConsultNotesWorker:
                     self._audit,
                     ctx,
                     server=SERVER,
-                    tool="decide_batch",
+                    tool=tool,
                     engine=entry.engine,
                     model=engine.info.model,
                     model_version=entry.model_version,
@@ -390,6 +402,7 @@ class ConsultNotesWorker:
                                 "question_ref": f"{a.question_id}@{a.question_version}",
                                 "answer": a.answer,
                                 "probability": a.probability,
+                                "text_hash": sha256_hex(a.text) if a.text else None,
                             }
                             for a in answers
                         ]
@@ -402,63 +415,198 @@ class ConsultNotesWorker:
             return run_call
 
         results = await self._bounded([call(w) for w in windows])
-
         votes: dict[tuple[str, int], list[Vote]] = {(q.id, q.version): [] for q in questions}
         for window, answers in results:
             for a in answers:
                 votes[(a.question_id, a.question_version)].append(Vote(a, window.segment_ids))
+        return votes
 
+    def _unsure(self, best: Vote | None, votes: Sequence[Vote]) -> bool:
+        """Below the review level: the aggregated answer, or any window if nothing to note."""
+        if best is not None:
+            return best.answer.probability < self._review_below
+        return any(v.answer.probability < self._review_below for v in votes)
+
+    async def _key_points(
+        self,
+        ctx: Context,
+        run: ClaimedRun,
+        questions: Sequence[TypedQuestion],
+        windows: Sequence[Window],
+    ) -> tuple[tuple[DraftKeyPoint, ...], tuple[DraftOpenItem, ...]]:
+        jev_qs = [q for q in questions if q.kind != "explain"]
+        explain_qs = [q for q in questions if q.kind == "explain"]
         key_points: list[DraftKeyPoint] = []
         open_items: list[DraftOpenItem] = []
-        for q in questions:
-            vote = aggregate(q, votes[(q.id, q.version)])
-            if vote is None:
-                continue
-            option = _option(q, vote.answer.answer)
-            label = (option.label or option.description) if option else None
-            meets = vote.answer.probability >= q.threshold
-            key_points.append(
-                DraftKeyPoint(
-                    transcript_id=run.transcript_id,
-                    question_id=q.id,
-                    question_version=q.version,
-                    kind=q.kind,
-                    answer=vote.answer.answer,
-                    answer_label=label[:300] if label else None,
-                    level=option.level if q.kind == "score" and option else None,
-                    probability=vote.answer.probability,
-                    threshold=q.threshold,
-                    meets_threshold=meets,
-                    segment_ids=vote.segment_ids,
-                    engine=entry.engine,
-                    model_version=entry.model_version,
-                    idempotency_key=f"cn:{run.transcript_id}:k:{q.ref}",
+        review: Selected[DecisionEngine] | None = None
+
+        if jev_qs:
+            decision = await self._engines.decision(health_data=True)
+            votes = await self._decide(ctx, run, decision, jev_qs, windows, tool="decide_batch")
+            first = {q.ref: aggregate(q, votes[(q.id, q.version)]) for q in jev_qs}
+            unsure = [q for q in jev_qs if self._unsure(first[q.ref], votes[(q.id, q.version)])]
+            second: dict[str, Vote | None] = {}
+            if unsure:
+                review = await self._engines.decision_review(health_data=True)
+                review_votes = await self._decide(
+                    ctx, run, review, unsure, windows, tool="review_batch"
                 )
-            )
-            if not meets:
+                second = {q.ref: aggregate(q, review_votes[(q.id, q.version)]) for q in unsure}
+
+            for q in jev_qs:
+                point: DraftKeyPoint | None
+                items: list[DraftOpenItem] = []
+                if q.ref in second:
+                    assert review is not None
+                    point, items = _reviewed(
+                        run, q, first[q.ref], decision.entry, second[q.ref], review.entry
+                    )
+                else:
+                    vote = first[q.ref]
+                    point = _key_point(run, q, vote, decision.entry) if vote else None
+                    if vote is not None and point is not None and not point.meets_threshold:
+                        items.append(
+                            DraftOpenItem(
+                                kind="missing_info",
+                                severity=None,
+                                description=(
+                                    f"Confirm key point: {q.text} Suggested answer: "
+                                    f"{_label(q, vote.answer.answer)} "
+                                    f"({vote.answer.probability:.0%} confidence, "
+                                    f"threshold {q.threshold:.0%})."
+                                )[:2000],
+                                idempotency_key=f"cn:{run.transcript_id}:o:missing_info:{q.ref}",
+                            )
+                        )
+                if point is None:
+                    continue
+                key_points.append(point)
+                open_items.extend(items)
+                urgent = _urgent_item(run, q, point)
+                if urgent is not None:
+                    open_items.append(urgent)
+
+        # Explain questions need words, not an option: straight to the SLM, then the GP.
+        if explain_qs:
+            review = review or await self._engines.decision_review(health_data=True)
+            votes = await self._decide(ctx, run, review, explain_qs, windows, tool="explain_batch")
+            for q in explain_qs:
+                explained = aggregate(q, votes[(q.id, q.version)])
+                if explained is None:
+                    continue
+                key_points.append(
+                    _key_point(run, q, explained, review.entry, source="slm", meets=False)
+                )
                 open_items.append(
                     DraftOpenItem(
                         kind="missing_info",
                         severity=None,
                         description=(
-                            f"Confirm key point: {q.text} Suggested answer: "
-                            f"{label or vote.answer.answer} "
-                            f"({vote.answer.probability:.0%} confidence, "
-                            f"threshold {q.threshold:.0%})."
+                            f"Confirm explanation: {q.text} "
+                            f"({explained.answer.probability:.0%} confidence)."
                         )[:2000],
-                        idempotency_key=f"cn:{run.transcript_id}:o:missing_info:{q.ref}",
-                    )
-                )
-            elif q.id == URGENCY_QUESTION and option and option.level in URGENT_SEVERITY:
-                open_items.append(
-                    DraftOpenItem(
-                        kind="urgent",
-                        severity=URGENT_SEVERITY[option.level],
-                        description=(
-                            f"Urgency assessed from the consult: "
-                            f"{option.description or option.value}."
-                        )[:2000],
-                        idempotency_key=f"cn:{run.transcript_id}:o:urgent:{q.ref}",
+                        idempotency_key=f"cn:{run.transcript_id}:o:explain:{q.ref}",
                     )
                 )
         return tuple(key_points), tuple(open_items)
+
+
+def _label(question: TypedQuestion, answer: str) -> str:
+    option = _option(question, answer)
+    return (option.label or option.description or answer) if option else answer
+
+
+def _key_point(
+    run: ClaimedRun,
+    q: TypedQuestion,
+    vote: Vote,
+    entry: EngineEntry,
+    *,
+    source: AnswerSource = "decision_engine",
+    meets: bool | None = None,
+    other: Opinion | None = None,
+) -> DraftKeyPoint:
+    option = _option(q, vote.answer.answer)
+    label = (option.label or option.description) if option else None
+    return DraftKeyPoint(
+        transcript_id=run.transcript_id,
+        question_id=q.id,
+        question_version=q.version,
+        kind=q.kind,
+        answer=vote.answer.answer,
+        answer_label=label[:300] if label else None,
+        level=option.level if q.kind == "score" and option else None,
+        probability=vote.answer.probability,
+        threshold=q.threshold,
+        meets_threshold=vote.answer.probability >= q.threshold if meets is None else meets,
+        segment_ids=vote.segment_ids,
+        engine=entry.engine,
+        model_version=entry.model_version,
+        idempotency_key=f"cn:{run.transcript_id}:k:{q.ref}",
+        answer_source=source,
+        answer_text=vote.answer.text if q.kind == "explain" else None,
+        other_opinion=other,
+    )
+
+
+def _reviewed(
+    run: ClaimedRun,
+    q: TypedQuestion,
+    first: Vote | None,
+    first_entry: EngineEntry,
+    second: Vote | None,
+    second_entry: EngineEntry,
+) -> tuple[DraftKeyPoint | None, list[DraftOpenItem]]:
+    """Jev was unsure: suggest the more confident opinion, keep the other, ask the GP."""
+    opinions: list[tuple[Vote, EngineEntry, AnswerSource]] = []
+    if first is not None:
+        opinions.append((first, first_entry, "decision_engine"))
+    if second is not None:
+        opinions.append((second, second_entry, "slm"))
+    if not opinions:
+        return None, []  # neither engine found anything to note
+    chosen = max(opinions, key=lambda o: o[0].answer.probability)  # a tie keeps Jev's answer
+    other = next(
+        (
+            Opinion(v.answer.answer, v.answer.probability, e.engine)
+            for v, e, _ in opinions
+            if v is not chosen[0]
+        ),
+        None,
+    )
+    vote, entry, source = chosen
+    point = _key_point(run, q, vote, entry, source=source, meets=False, other=other)
+
+    def said(v: Vote | None) -> str:
+        if v is None:
+            return "nothing to note"
+        return f"{_label(q, v.answer.answer)} ({v.answer.probability:.0%})"
+
+    item = DraftOpenItem(
+        kind="missing_info",
+        severity=None,
+        description=(
+            f"Confirm key point: {q.text} The decision engine was not confident. "
+            f"Decision engine: {said(first)}; SLM: {said(second)}. "
+            f"Suggested answer: {_label(q, vote.answer.answer)}."
+        )[:2000],
+        idempotency_key=f"cn:{run.transcript_id}:o:review:{q.ref}",
+    )
+    return point, [item]
+
+
+def _urgent_item(run: ClaimedRun, q: TypedQuestion, point: DraftKeyPoint) -> DraftOpenItem | None:
+    """High urgency with enough confidence (from either engine) is flagged straight away."""
+    if q.id != URGENCY_QUESTION or point.probability < q.threshold:
+        return None
+    option = _option(q, point.answer)
+    if option is None or option.level not in URGENT_SEVERITY:
+        return None
+    return DraftOpenItem(
+        kind="urgent",
+        severity=URGENT_SEVERITY[option.level],
+        description=(f"Urgency assessed from the consult: {option.description or option.value}.")[
+            :2000
+        ],
+        idempotency_key=f"cn:{run.transcript_id}:o:urgent:{q.ref}",
+    )

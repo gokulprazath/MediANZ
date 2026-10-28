@@ -57,12 +57,14 @@ on conflict (idempotency_key) do nothing
 _INSERT_KEY_POINT = """
 insert into public.consult_key_points
   (transcript_id, appointment_id, question_id, question_version, kind, answer, answer_label,
-   level, probability, threshold, meets_threshold, source_segment_ids, engine, model_version,
-   idempotency_key, created_by_agent)
+   answer_text, level, probability, threshold, meets_threshold, source_segment_ids, engine,
+   model_version, answer_source, other_opinion_answer, other_opinion_probability,
+   other_opinion_engine, idempotency_key, created_by_agent)
 values
   (%(transcript_id)s, %(scope_appointment_id)s, %(question_id)s, %(question_version)s,
-   %(kind)s, %(answer)s, %(answer_label)s, %(level)s, %(probability)s, %(threshold)s,
-   %(meets_threshold)s, %(segment_ids)s::uuid[], %(engine)s, %(model_version)s, %(key)s,
+   %(kind)s, %(answer)s, %(answer_label)s, %(answer_text)s, %(level)s, %(probability)s,
+   %(threshold)s, %(meets_threshold)s, %(segment_ids)s::uuid[], %(engine)s, %(model_version)s,
+   %(answer_source)s, %(other_answer)s, %(other_probability)s, %(other_engine)s, %(key)s,
    %(agent)s)
 on conflict (idempotency_key) do nothing
 """
@@ -183,6 +185,7 @@ class PgConsultNotesRepository:
                 )
             key_points = 0
             for k in results.key_points:
+                other = k.other_opinion
                 key_points += await sc.execute(
                     _INSERT_KEY_POINT,
                     {
@@ -192,6 +195,7 @@ class PgConsultNotesRepository:
                         "kind": k.kind,
                         "answer": k.answer,
                         "answer_label": k.answer_label,
+                        "answer_text": k.answer_text,
                         "level": k.level,
                         "probability": round(k.probability, 3),
                         "threshold": round(k.threshold, 3),
@@ -199,6 +203,10 @@ class PgConsultNotesRepository:
                         "segment_ids": list(k.segment_ids),
                         "engine": k.engine,
                         "model_version": k.model_version,
+                        "answer_source": k.answer_source,
+                        "other_answer": other.answer if other else None,
+                        "other_probability": round(other.probability, 3) if other else None,
+                        "other_engine": other.engine if other else None,
                         "key": k.idempotency_key,
                         "agent": agent_id,
                     },

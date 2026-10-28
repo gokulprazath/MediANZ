@@ -46,9 +46,10 @@ Skip any you have already run.
 | 10 | `migrations/20261027020000_service_discovery.sql` | Service catalogue, prices, insurance coverage/acceptance evidence, patient policy documents, staff-reviewed research drafts, service booking |
 | 11 | `seed/05_discovery_sample.sql` | Sample dental clinics, services, prices, insurance evidence, research targets and generated slots |
 | 12 | `migrations/20261028000000_consult_key_points.sql` | Consult notes: processing queue (`consult_note_runs`, queued when a transcript is approved, published to Realtime), draft key points from the decision engine, review functions, deletion cascade |
-| 13 | `seed/06_nebius_engines.sql` | Development only: Nebius Token Factory as the SLM extraction engine (allows health data) |
+| 13 | `migrations/20261028010000_key_point_second_opinion.sql` | Key points: SLM second opinion when Jev is below 0.6, `explain` question kind (free-text answers), `edit_and_approve_key_point_text` |
+| 14 | `seed/06_nebius_engines.sql` | Development only: Nebius Token Factory as the SLM and Jev as the decision engine (both allow health data), sample explain questions |
 
-Files 4–6, 9 and 13 are sample data or development settings: use them only in a
+Files 4–6, 9 and 14 are sample data or development settings: use them only in a
 development project, never in the project that will hold real patients.
 
 ## MCP servers (Python, work in progress)
@@ -92,9 +93,9 @@ make agent               # or: uv run python -m healthmcp.agent
 
 Patient ids never come from request fields or tool arguments: the request
 models reject unknown fields, and the MCP servers read the patient from the
-token. The missing piece for real use is the Jev client: `insights` currently
-falls back to approved facts and the GP-query approval path because the Jev
-engine in `shared/engines/decision.py` is still a stub.
+token. The Jev engine in `shared/engines/decision.py` uses `typesafe_sdk`
+(set `JEV_API_KEY`); `insights` still answers from approved facts and the
+GP-query approval path.
 
 Configuration: copy `.env.example` to `.env`. Build notes and assumptions are in
 `docs/MCP_BUILD_SPEC.md` and `docs/DECISIONS.md`.
@@ -151,13 +152,17 @@ talking only to Supabase:
    ```
 
    The SLM (engine `slm`, e.g. Nebius) writes draft `clinical_facts` for every
-   active `clinical_fields` entry. The decision engine (Jev; `mock_decision`
-   until the Jev client is built) answers every active `decision_questions`
-   entry and writes draft `consult_key_points`. Low-confidence answers and
-   urgent findings raise `open_items`.
+   active `clinical_fields` entry. The decision engine (Jev, through
+   `typesafe_sdk`; `mock_decision` without seed 06) answers every active yes/no,
+   choice and score `decision_questions` entry, with the questions built from
+   the table at run time, and writes draft `consult_key_points`. Jev answers
+   below 0.6 also get the SLM's opinion, and the GP confirms. `explain`
+   questions (free-text answers) go straight to the SLM. Low-confidence
+   answers and urgent findings raise `open_items`.
 5. The app watches `consult_note_runs` over Realtime. The treating clinician
    reviews drafts with `rpc/approve_fact` / `reject_fact` and
-   `rpc/approve_key_point` / `edit_and_approve_key_point` / `reject_key_point`.
+   `rpc/approve_key_point` / `edit_and_approve_key_point` /
+   `edit_and_approve_key_point_text` (explain questions) / `reject_key_point`.
    The patient sees approved items only.
 
 Step-by-step curl commands for the whole flow are in [`check.md`](check.md).

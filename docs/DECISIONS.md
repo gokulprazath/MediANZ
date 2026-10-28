@@ -99,9 +99,27 @@ New decisions are appended; old decisions are not silently rewritten.
   - **Jev** (decision engine) answers every active `decision_questions` entry and writes
     draft `consult_key_points`. Attribute (`attr_*`) and evidence questions are not key
     points.
-- The Jev client is not built yet (it needs the API docs at `JEV_DOCS_PATH`), so
-  `mock_decision` is enabled until then. Switching is a `model_registry` change, never an
-  automatic fallback.
+- Jev is called through `typesafe_sdk` (`AsyncTypeSafeClient.system_one`, model
+  `JEV_MODEL`, default `jev-latest`). The questions are built at call time from the
+  active `decision_questions` rows, so adding or editing a row changes what Jev is
+  asked with no code change: `choice` → `Choice` (criteria = option values and labels),
+  `score` → `Score` (criteria = level descriptions in level order; Jev scores by
+  position from zero), `yes_no` → a three-way `Choice` of yes / no / not_stated. A
+  `Noul` was not used because it returns only P(yes), and "not discussed" must stay
+  distinct from "denied".
+- An answer's probability is the lower of the chosen option's probability and Jev's
+  `confidence`. If it is below `DECISION_REVIEW_BELOW` (0.6), or Jev found nothing to
+  note but was unsure in some window, the SLM answers the same question. The more
+  confident answer becomes the suggestion (`answer_source`), the other is kept
+  (`other_opinion_*`), `meets_threshold` is false, and a `missing_info` open item asks the
+  GP to confirm. This is a documented review step, not a fallback: both answers are
+  stored, and the patient sees only what the GP approves.
+- `explain` questions (new kind, no options) need a short explanation rather than an
+  option. They skip Jev and go straight to the SLM; the explanation is stored in
+  `answer_text`, always needs GP approval (`edit_and_approve_key_point_text` edits it),
+  and is never logged (`decision_log` holds a hash).
+- The SLM is reached through the enabled extraction entry (`EngineRegistry.decision_review`),
+  so it needs the same `allow_health_data` approval as extraction.
 - The transcript is split into windows of segments (`CONSULT_NOTES_WINDOW_SEGMENTS`,
   default 20). Each field is extracted per window, so several medications or symptoms are
   kept, and the same value found twice is stored once. Each question is answered per
@@ -121,8 +139,11 @@ New decisions are appended; old decisions are not silently rewritten.
   them through `approve_key_point`, `edit_and_approve_key_point` and `reject_key_point`
   (and the existing fact functions). An edited answer must be one of the question's
   options. The patient sees approved items only.
-- Key points store option values, probabilities and segment ids, never transcript text.
-  Facts store a quote hash, never the quote.
+- Key points store option values, probabilities and segment ids, never transcript text,
+  except an explain key point's `answer_text`, which is what the GP reviews. Facts store
+  a quote hash, never the quote.
+- Before production, confirm TypeSafe's hosting region and data-retention terms, as for
+  Nebius; `seed/06` allows health data for both in development only.
 - Deleting an approved transcript (for example on consent withdrawal) deletes draft and
   rejected key points and keeps approved ones with `source_removed_at`, the same as facts.
   TODO(legal): confirm this retention rule.

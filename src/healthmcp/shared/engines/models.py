@@ -26,6 +26,11 @@ class QuestionOption(BaseModel):
     description: str | None = None
 
 
+QuestionKind = Literal["yes_no", "choice", "score", "explain"]
+# Explain questions have no options: the answer is "answered" (with text) or "not_stated".
+EXPLAIN_VALUES = frozenset({"answered", "not_stated"})
+
+
 class TypedQuestion(BaseModel):
     """A decision question as stored in decision_questions (or built at call time)."""
 
@@ -33,13 +38,15 @@ class TypedQuestion(BaseModel):
 
     id: str
     version: int = Field(ge=1)
-    kind: Literal["yes_no", "choice", "score"]
+    kind: QuestionKind
     text: str
     options: tuple[QuestionOption, ...]
     threshold: float = Field(gt=0, le=1)
 
     @property
     def allowed_values(self) -> frozenset[str]:
+        if self.kind == "explain":
+            return EXPLAIN_VALUES
         return frozenset(o.value for o in self.options)
 
     @property
@@ -59,6 +66,8 @@ class TypedQuestion(BaseModel):
             o.level is None or not (o.description or "").strip() for o in self.options
         ):
             raise ValueError("every score level needs a level number and a description")
+        if self.kind == "explain" and self.options:
+            raise ValueError("explain questions have no options")
         return self
 
 
@@ -69,6 +78,7 @@ class TypedAnswer(BaseModel):
     question_version: int
     answer: str
     probability: float = Field(ge=0, le=1)
+    text: str | None = Field(default=None, min_length=1, max_length=1000)  # explain answers only
 
 
 class ClinicalField(BaseModel):

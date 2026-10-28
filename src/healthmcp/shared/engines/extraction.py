@@ -150,20 +150,25 @@ def _response_schema(field: ClinicalField) -> dict[str, Any]:
     }
 
 
+def slm_client(settings: Settings) -> Any:
+    """The SLM's OpenAI-compatible client (shared by extraction and SLM decisions)."""
+    if not (settings.slm_base_url and settings.slm_api_key and settings.slm_model):
+        raise EngineNotConfigured("SLM_BASE_URL, SLM_API_KEY and SLM_MODEL must be set.")
+    from openai import AsyncOpenAI
+
+    return AsyncOpenAI(
+        base_url=settings.slm_base_url,
+        api_key=settings.slm_api_key.get_secret_value(),
+        max_retries=0,  # no hidden retries: validated_call retries once on a bad result
+        timeout=30.0,
+    )
+
+
 class OpenAICompatibleEngine:
     def __init__(self, entry: EngineEntry, settings: Settings) -> None:
-        if not (settings.slm_base_url and settings.slm_api_key and settings.slm_model):
-            raise EngineNotConfigured("SLM_BASE_URL, SLM_API_KEY and SLM_MODEL must be set.")
-        from openai import AsyncOpenAI
-
+        self._client = slm_client(settings)
         self.info = _info(entry).model_copy(update={"model": settings.slm_model})
         self._model = settings.slm_model
-        self._client = AsyncOpenAI(
-            base_url=settings.slm_base_url,
-            api_key=settings.slm_api_key.get_secret_value(),
-            max_retries=0,  # no hidden retries: validated_call retries once on a bad result
-            timeout=30.0,
-        )
 
     async def extract(self, field: ClinicalField, segments: Sequence[Segment]) -> ExtractedValue:
         payload = {

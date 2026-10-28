@@ -286,3 +286,123 @@ def test_consent_withdrawal_removes_drafts_and_unlinks_approved(db: Db) -> None:
         )
         == 0
     )
+
+
+# ---------------------------------------------------------------------------
+# 20261028010000: second opinions and explain questions
+# ---------------------------------------------------------------------------
+def _explain_question(db: Db, qid: str = "test_plan_summary") -> str:
+    db.as_admin()
+    db.q(
+        "insert into public.decision_questions (id, version, kind, text, options, threshold) "
+        "values (%s, 1, 'explain', 'What plan was agreed?', '[]', 0.7)",
+        [qid],
+    )
+    return qid
+
+
+def _insert_explain_point(
+    db: Db, key: str, text: str | None = "Iron daily; bloods in 3 months."
+) -> str:
+    qid = _explain_question(db)
+    segs = _segment_ids(db, OLIVIA_APPROVED_APPT)
+    db.as_role("service_role")
+    return str(
+        db.val(
+            """insert into public.consult_key_points
+                 (transcript_id, appointment_id, question_id, question_version, kind, answer,
+                  answer_text, probability, threshold, meets_threshold, source_segment_ids,
+                  engine, model_version, answer_source, idempotency_key, created_by_agent)
+               values (%s, %s, %s, 1, 'explain', 'answered', %s, 0.8, 0.7, false, %s::uuid[],
+                       'slm', '1', 'slm', %s, 'consult-notes')
+               returning id""",
+            [OLIVIA_APPROVED_TRANSCRIPT, OLIVIA_APPROVED_APPT, qid, text, segs[:1], key],
+        )
+    )
+
+
+def test_explain_questions_have_no_options(db: Db) -> None:
+    db.as_admin()
+    err = db.savepoint_error(
+        "insert into public.decision_questions (id, version, kind, text, options, threshold) "
+        """values ('test_bad_explain', 1, 'explain', '?', '[{"value":"yes"}]', 0.7)"""
+    )
+    assert isinstance(err, psycopg.errors.CheckViolation)
+    assert _explain_question(db) == "test_plan_summary"
+
+
+def test_answer_text_only_on_answered_explain_points(db: Db) -> None:
+    kp = _insert_explain_point(db, "test-kp-explain-0001")
+    db.as_admin()
+    assert db.val("select answer_text from public.consult_key_points where id = %s", [kp])
+
+    segs = _segment_ids(db, OLIVIA_APPROVED_APPT)
+    db.as_role("service_role")
+    err = db.savepoint_error(
+        """insert into public.consult_key_points
+             (transcript_id, appointment_id, question_id, question_version, kind, answer,
+              probability, threshold, meets_threshold, source_segment_ids, idempotency_key)
+           values (%s, %s, 'test_plan_summary', 1, 'explain', 'answered', 0.8, 0.7, false,
+                   %s::uuid[], 'test-kp-explain-0002')""",
+        [OLIVIA_APPROVED_TRANSCRIPT, OLIVIA_APPROVED_APPT, segs[:1]],
+    )
+    assert isinstance(err, psycopg.errors.CheckViolation)  # answered without text
+    err = db.savepoint_error(
+        """insert into public.consult_key_points
+             (transcript_id, appointment_id, question_id, question_version, kind, answer,
+              answer_text, probability, threshold, meets_threshold, source_segment_ids,
+              idempotency_key)
+           values (%s, %s, 'fatigue_reported', 1, 'yes_no', 'yes', 'because', 0.9, 0.7, true,
+                   %s::uuid[], 'test-kp-explain-0003')""",
+        [OLIVIA_APPROVED_TRANSCRIPT, OLIVIA_APPROVED_APPT, segs[:1]],
+    )
+    assert isinstance(err, psycopg.errors.CheckViolation)  # text on a yes/no answer
+
+
+def test_other_opinion_is_all_or_nothing(db: Db) -> None:
+    segs = _segment_ids(db, OLIVIA_APPROVED_APPT)
+    db.as_role("service_role")
+    err = db.savepoint_error(
+        """insert into public.consult_key_points
+             (transcript_id, appointment_id, question_id, question_version, kind, answer,
+              probability, threshold, meets_threshold, source_segment_ids,
+              other_opinion_answer, idempotency_key)
+           values (%s, %s, 'fatigue_reported', 1, 'yes_no', 'yes', 0.9, 0.7, false,
+                   %s::uuid[], 'no', 'test-kp-opinion-0001')""",
+        [OLIVIA_APPROVED_TRANSCRIPT, OLIVIA_APPROVED_APPT, segs[:1]],
+    )
+    assert isinstance(err, psycopg.errors.CheckViolation)
+
+
+def test_edit_and_approve_key_point_text(db: Db) -> None:
+    kp = _insert_explain_point(db, "test-kp-explain-0010")
+    for who in ("olivia", "williams"):
+        db.as_user(who)
+        err = db.savepoint_error("select public.edit_and_approve_key_point_text(%s, 'x')", [kp])
+        assert isinstance(err, psycopg.errors.InsufficientPrivilege), who
+    db.as_role("service_role")
+    err = db.savepoint_error("select public.edit_and_approve_key_point_text(%s, 'x')", [kp])
+    assert isinstance(err, psycopg.errors.InsufficientPrivilege)
+
+    db.as_user("rao")
+    # Explain points have no option values, and other kinds take no text.
+    err = db.savepoint_error("select public.edit_and_approve_key_point(%s, 'yes')", [kp])
+    assert isinstance(err, psycopg.errors.RaiseException)
+    yes_no = _insert_key_point(db, "test-kp-explain-0011")
+    db.as_user("rao")
+    err = db.savepoint_error("select public.edit_and_approve_key_point_text(%s, 'x')", [yes_no])
+    assert isinstance(err, psycopg.errors.RaiseException)
+
+    db.q("select public.edit_and_approve_key_point_text(%s, '  Iron daily.  ')", [kp])
+    db.as_admin()
+    row = db.one(
+        "select status, answer, answer_text, answer_edited from public.consult_key_points "
+        "where id = %s",
+        [kp],
+    )
+    assert row == {
+        "status": "approved",
+        "answer": "answered",
+        "answer_text": "Iron daily.",
+        "answer_edited": True,
+    }

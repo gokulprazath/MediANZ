@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "mcp>=2.3",
+    "mcp-types>=2.3",
+    "anyio>=4.9",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "psycopg[binary]>=3.2",
@@ -22,6 +24,7 @@ dependencies = [
     "httpx2>=2.16",
     "langchain-core>=1.7,<2",
     "fastapi>=0.162.0",
+    "typesafe-sdk>=0.7.5,<0.8",
 ]
 
 [dependency-groups]

@@ -30,6 +30,7 @@ from healthmcp.shared.context import Context
 from healthmcp.shared.engines.extraction import repair_offsets
 from healthmcp.shared.engines.models import (
     ClinicalField,
+    EngineInfo,
     QuestionOption,
     Segment,
     TypedAnswer,
@@ -260,9 +261,14 @@ async def test_run_saves_facts_key_points_and_urgent_item() -> None:
     [item] = repo.of("o")
     assert (item.kind, item.severity) == ("urgent", 9)
 
-    # Every engine call is logged, with hashes and ids only.
+    # Every engine call is logged, with hashes and ids only. The mock is confident
+    # (>= 0.6) everywhere, so the SLM is never asked for a second opinion.
     windows = 3
     assert len(audit.decisions) == len(FIELDS) * windows + windows
+    assert "review_batch" not in {d.tool for d in audit.decisions}
+    assert all(
+        k.answer_source == "decision_engine" and k.other_opinion is None for k in points.values()
+    )
     for entry in audit.decisions:
         assert entry.appointment_id == APPT and entry.input_hash
         assert "Olivia" not in json.dumps(entry.output) + json.dumps(entry.input_refs)
@@ -341,6 +347,139 @@ async def test_low_confidence_answer_raises_missing_info() -> None:
     assert point.meets_threshold is False
     [item] = repo.of("o")
     assert item.kind == "missing_info" and "fatigue_reported?" in item.description
+
+
+# ---------------------------------------------------------------------------
+# Jev unsure -> SLM second opinion -> GP; explain questions -> SLM directly
+# ---------------------------------------------------------------------------
+class ScriptedEngine:
+    """Answers from a script: {question_id: (answer, probability, text)}."""
+
+    def __init__(self, name: str, script: dict[str, tuple[str, float, str | None]]) -> None:
+        self.info = EngineInfo(engine=name, provider="test", model=name, model_version="1")
+        self.script = script
+        self.asked: list[list[str]] = []
+
+    async def decide(self, questions: Sequence[TypedQuestion], state: str) -> list[TypedAnswer]:
+        self.asked.append([q.id for q in questions])
+        out = []
+        for q in questions:
+            answer, probability, text = self.script.get(q.id, ("not_stated", 0.9, None))
+            out.append(
+                TypedAnswer(
+                    question_id=q.id,
+                    question_version=q.version,
+                    answer=answer,
+                    probability=probability,
+                    text=text,
+                )
+            )
+        return out
+
+
+class ScriptedRegistry:
+    def __init__(self, jev: ScriptedEngine, slm: ScriptedEngine) -> None:
+        self.real = EngineRegistry(make_settings(), FakeModelRegistryRepository())
+        self.jev, self.slm = jev, slm
+
+    async def extraction(self, *, health_data: bool) -> Any:
+        return await self.real.extraction(health_data=health_data)
+
+    async def decision(self, *, health_data: bool) -> Any:
+        selected = await self.real.decision(health_data=health_data)
+        return type(selected)(self.jev, selected.entry.model_copy(update={"engine": "jev"}))
+
+    async def decision_review(self, *, health_data: bool) -> Any:
+        selected = await self.real.decision_review(health_data=health_data)
+        return type(selected)(self.slm, selected.entry.model_copy(update={"engine": "slm"}))
+
+
+EXPLAIN_Q = _q("management_plan_summary", "explain", (), 0.7)
+PLAN_TEXT = "Start an iron supplement once a day and repeat the blood test in three months."
+
+
+async def test_unsure_jev_answer_gets_slm_opinion_then_gp() -> None:
+    questions = [QUESTIONS[1], QUESTIONS[4], QUESTIONS[0]]  # fatigue, smoker, chest pain
+    jev = ScriptedEngine(
+        "jev",
+        {
+            "fatigue_reported": ("yes", 0.5, None),  # unsure
+            "smoker_status": ("former", 0.55, None),  # unsure
+            "chest_pain_reported": ("yes", 0.95, None),  # confident
+        },
+    )
+    slm = ScriptedEngine(
+        "slm",
+        {"fatigue_reported": ("yes", 0.85, None), "smoker_status": ("never", 0.4, None)},
+    )
+    repo = FakeConsultNotesRepository(questions=questions)
+    worker, audit = _worker(repo, registry=ScriptedRegistry(jev, slm))
+    [summary] = await _run_all(repo, worker)
+    assert summary.status == "done"
+
+    # Only the unsure questions are sent for a second opinion.
+    assert all(asked == ["fatigue_reported", "smoker_status"] for asked in slm.asked)
+    points = {k.question_id: k for k in repo.of("k")}
+
+    fatigue = points["fatigue_reported"]  # SLM more confident: suggested, Jev's kept
+    assert (fatigue.answer, fatigue.answer_source, fatigue.engine) == ("yes", "slm", "slm")
+    assert fatigue.other_opinion is not None
+    assert (fatigue.other_opinion.engine, fatigue.other_opinion.probability) == ("jev", 0.5)
+    assert fatigue.meets_threshold is False
+
+    smoker = points["smoker_status"]  # Jev more confident: Jev's answer, SLM's kept
+    assert (smoker.answer, smoker.answer_source) == ("former", "decision_engine")
+    assert smoker.other_opinion is not None and smoker.other_opinion.answer == "never"
+
+    chest = points["chest_pain_reported"]
+    assert (chest.answer_source, chest.other_opinion, chest.meets_threshold) == (
+        "decision_engine",
+        None,
+        True,
+    )
+
+    # The GP is asked to confirm every reviewed key point.
+    reviews = sorted(o.idempotency_key.rsplit(":", 1)[1] for o in repo.of("o"))
+    assert reviews == ["fatigue_reported@1", "smoker_status@1"]
+    assert all(
+        "Decision engine:" in o.description and "SLM:" in o.description for o in repo.of("o")
+    )
+    assert {d.tool for d in audit.decisions} >= {"decide_batch", "review_batch"}
+
+    # Re-running inserts nothing new.
+    repo.queue.append(ClaimedRun(uuid.uuid4(), TRANSCRIPT, APPT, 0))
+    [again] = await _run_all(repo, worker)
+    assert again.inserted == 0
+
+
+async def test_explain_questions_go_straight_to_the_slm() -> None:
+    jev = ScriptedEngine("jev", {"fatigue_reported": ("yes", 0.9, None)})
+    slm = ScriptedEngine("slm", {"management_plan_summary": ("answered", 0.8, PLAN_TEXT)})
+    repo = FakeConsultNotesRepository(questions=[QUESTIONS[1], EXPLAIN_Q])
+    worker, audit = _worker(repo, registry=ScriptedRegistry(jev, slm))
+    await _run_all(repo, worker)
+
+    assert all("management_plan_summary" not in asked for asked in jev.asked)
+    points = {k.question_id: k for k in repo.of("k")}
+    plan = points["management_plan_summary"]
+    assert (plan.kind, plan.answer, plan.answer_text, plan.answer_source) == (
+        "explain",
+        "answered",
+        PLAN_TEXT,
+        "slm",
+    )
+    assert plan.meets_threshold is False and plan.answer_label is None
+    [item] = repo.of("o")
+    assert item.idempotency_key.endswith(":explain:management_plan_summary@1")
+    assert "iron" not in item.description
+
+    # The explanation is stored for the GP but never logged.
+    explain_logs = [d for d in audit.decisions if d.tool == "explain_batch"]
+    assert explain_logs and all(
+        "iron" not in json.dumps(d.output) and d.output["answers"][0]["text_hash"]
+        for d in explain_logs
+        if d.output["answers"][0]["answer"] == "answered"
+    )
 
 
 # ---------------------------------------------------------------------------
