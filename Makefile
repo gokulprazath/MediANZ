@@ -1,4 +1,4 @@
-.PHONY: sync test test-integration lint format typecheck gateway agent research token db-reset
+.PHONY: sync test test-integration lint format typecheck gateway agent research consult-worker token db-reset
 
 sync:
 	uv sync
@@ -32,6 +32,12 @@ agent:
 
 research:
 	uv run python -m healthmcp.discovery.research_job $(ARGS)
+
+# Approved transcripts -> draft facts (SLM) and key points (decision engine).
+# Examples: make consult-worker ARGS=--once
+#           make consult-worker ARGS="--appointment 60000000-0000-4000-8000-000000000002"
+consult-worker:
+	uv run python -m healthmcp.consult_notes.worker $(ARGS)
 
 # Example: make token AGENT=clinical-doc-agent APPOINTMENT=60000000-0000-4000-8000-000000000002
 token:

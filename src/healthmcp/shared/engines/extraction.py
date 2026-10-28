@@ -61,6 +61,48 @@ def check_extraction(
     return safe_check
 
 
+def repair_offsets(raw: Any, segments: Sequence[Segment]) -> Any:
+    """Fix a model's quote offsets when the quote is unambiguous.
+
+    Language models copy quotes well but count characters badly. If the quote is
+    not at the given offsets but occurs exactly once in the named segment (or, when
+    the named segment does not contain it, exactly once across all segments), point
+    to that occurrence. Anything else is returned unchanged and fails the normal check.
+    """
+    if not isinstance(raw, dict) or raw.get("value") is None:
+        return raw
+    quote = raw.get("quote")
+    if not isinstance(quote, str) or not quote:
+        return raw
+    by_id = {str(s.id): s for s in segments}
+    seg = by_id.get(str(raw.get("segment_id")))
+    start, end = raw.get("char_start"), raw.get("char_end")
+    if (
+        seg is not None
+        and isinstance(start, int)
+        and isinstance(end, int)
+        and seg.text[start:end] == quote
+    ):
+        return raw
+    in_named = seg.text.count(quote) if seg is not None else 0
+    if in_named == 1 and seg is not None:
+        found = seg
+    elif in_named > 1:
+        return raw  # ambiguous inside the named segment
+    else:
+        matches = [s for s in segments if quote in s.text]
+        if len(matches) != 1 or matches[0].text.count(quote) != 1:
+            return raw
+        found = matches[0]
+    idx = found.text.index(quote)
+    return {
+        **raw,
+        "segment_id": str(found.id),
+        "char_start": idx,
+        "char_end": idx + len(quote),
+    }
+
+
 def _info(entry: EngineEntry) -> EngineInfo:
     return EngineInfo(
         engine=entry.engine,
@@ -147,7 +189,8 @@ class OpenAICompatibleEngine:
                     "json_schema": {"name": "extracted_value", "schema": _response_schema(field)},
                 },
             )
-            return json.loads(response.choices[0].message.content or "null")
+            raw = json.loads(response.choices[0].message.content or "null")
+            return repair_offsets(raw, segments)
 
         return await validated_call(
             call, _EXTRACTED, check=check_extraction(field, segments), engine=self.info.engine

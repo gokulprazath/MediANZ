@@ -52,12 +52,19 @@ class Settings(BaseSettings):
     agent_action_ttl_seconds: int = Field(default=300, ge=30, le=900)
     agent_port: int = Field(default=3108, ge=1, le=65535)
 
+    # Consult-notes worker (SLM facts + decision-engine key points from approved transcripts)
+    consult_notes_window_segments: int = Field(default=20, ge=1, le=200)
+    consult_notes_concurrency: int = Field(default=4, ge=1, le=32)
+    consult_worker_poll_seconds: float = Field(default=10.0, gt=0, le=3600)
+    consult_worker_max_attempts: int = Field(default=3, ge=1, le=10)
+
     # Runtime
     data_backend: Literal["pg", "fake"] = "pg"
     agents_config_path: Path = Path("config/agents.json")
     mock_fixtures_dir: Path = Path("tests/fixtures")
     host: str = "127.0.0.1"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    log_dir: Path | None = None  # also write <log_dir>/<service>.log (same redaction)
     max_request_bytes: int = Field(default=256 * 1024, ge=1024, le=10 * 1024 * 1024)
     rate_limit_per_minute: int = Field(default=120, ge=1)
     db_pool_min_size: int = Field(default=1, ge=0)

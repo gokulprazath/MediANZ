@@ -224,3 +224,7 @@ __marimo__/
 # Local editor settings
 .vscode/
 .idea/
+
+# Local service logs (LOG_DIR=logs); keep the folder itself
+logs/*
+!logs/.gitkeep

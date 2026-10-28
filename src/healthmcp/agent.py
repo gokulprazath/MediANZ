@@ -919,7 +919,7 @@ def create_app(service: AgentService) -> Starlette:
 
 def main() -> None:
     settings = Settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, log_dir=settings.log_dir, name="agent")
     service = AgentService(settings)
     uvicorn.run(
         create_app(service),

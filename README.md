@@ -45,9 +45,11 @@ Skip any you have already run.
 | 9 | `seed/04_agent_layer_sample.sql` | Sample agent-layer data: questions, fields, mock engines on, clinician languages, preferences, fees, plan versions, scores, review summaries; moves Olivia's approved transcript consents to `v2` (safe to re-run) |
 | 10 | `migrations/20261027020000_service_discovery.sql` | Service catalogue, prices, insurance coverage/acceptance evidence, patient policy documents, staff-reviewed research drafts, service booking |
 | 11 | `seed/05_discovery_sample.sql` | Sample dental clinics, services, prices, insurance evidence, research targets and generated slots |
+| 12 | `migrations/20261028000000_consult_key_points.sql` | Consult notes: processing queue (`consult_note_runs`, queued when a transcript is approved, published to Realtime), draft key points from the decision engine, review functions, deletion cascade |
+| 13 | `seed/06_nebius_engines.sql` | Development only: Nebius Token Factory as the SLM extraction engine (allows health data) |
 
-Files 4–6 and 9 are sample data: use them only in a development project, never in
-the project that will hold real patients.
+Files 4–6, 9 and 13 are sample data or development settings: use them only in a
+development project, never in the project that will hold real patients.
 
 ## MCP servers (Python, work in progress)
 
@@ -124,7 +126,42 @@ them; the patient request path never invokes web search.
 Edge Functions → Deploy a new function → Via Editor → name it
 `transcribe-consult` → paste `supabase/functions/transcribe-consult/index.ts`
 → Deploy (keep "Verify JWT" on). Then add the `STT_API_URL`, `STT_API_KEY` and
-`STT_MODEL` secrets under Edge Functions → Secrets.
+`STT_MODEL` secrets under Edge Functions → Secrets. `STT_API_URL` is an
+OpenAI-compatible `/v1/audio/transcriptions` endpoint (Nebius Token Factory or
+another provider). Set `CORS_ALLOWED_ORIGIN` to the web app's origin
+(comma-separated for several); without it any origin may call the function
+(it still needs a signed-in user).
+
+## Consult notes
+
+Recording, transcription, key points and review, with the web app (Flutter)
+talking only to Supabase:
+
+1. Both parties consent: `rpc/give_recording_consent` with wording `v2` (covers AI analysis).
+2. The app records audio and posts it to the `transcribe-consult` Edge Function.
+   The audio is transcribed in memory and never stored; the draft transcript
+   waits for the patient.
+3. The patient approves it (`rpc/approve_transcript`). Segments are built and a
+   `consult_note_runs` row is queued automatically.
+4. The worker processes the queue:
+
+   ```
+   make consult-worker              # run until stopped
+   make consult-worker ARGS=--once  # drain the queue, then exit
+   ```
+
+   The SLM (engine `slm`, e.g. Nebius) writes draft `clinical_facts` for every
+   active `clinical_fields` entry. The decision engine (Jev; `mock_decision`
+   until the Jev client is built) answers every active `decision_questions`
+   entry and writes draft `consult_key_points`. Low-confidence answers and
+   urgent findings raise `open_items`.
+5. The app watches `consult_note_runs` over Realtime. The treating clinician
+   reviews drafts with `rpc/approve_fact` / `reject_fact` and
+   `rpc/approve_key_point` / `edit_and_approve_key_point` / `reject_key_point`.
+   The patient sees approved items only.
+
+Step-by-step curl commands for the whole flow are in [`check.md`](check.md).
+With `LOG_DIR=logs`, each service also writes `logs/<service>.log` (git-ignored).
 
 ## Recommended: two projects
 

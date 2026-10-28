@@ -10,7 +10,7 @@ from healthmcp.shared.logging import configure_logging
 
 def main() -> None:
     config = GatewayConfig.from_env()
-    configure_logging(os.getenv("LOG_LEVEL", "INFO"))
+    configure_logging(os.getenv("LOG_LEVEL", "INFO"), log_dir=os.getenv("LOG_DIR"), name="gateway")
     uvicorn.run(create_app(config), host=config.host, port=config.port, log_config=None)
 
 

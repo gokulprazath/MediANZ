@@ -20,6 +20,8 @@ import time
 import traceback
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
 import psycopg
@@ -138,12 +140,37 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(out, default=str)
 
 
-def configure_logging(level: str = "INFO") -> None:
-    handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter())
-    handler.addFilter(RedactingFilter())
+LOG_FILE_MAX_BYTES = 10 * 1024 * 1024
+LOG_FILE_BACKUPS = 5
+
+
+def configure_logging(
+    level: str = "INFO", *, log_dir: str | Path | None = None, name: str = "healthmcp"
+) -> None:
+    """JSON logs to stderr; with `log_dir`, also to a rotating `<log_dir>/<name>.log`.
+
+    Both handlers use the same redaction, so files never hold patient text either.
+    """
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_dir:
+        directory = Path(log_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            RotatingFileHandler(
+                directory / f"{name}.log",
+                maxBytes=LOG_FILE_MAX_BYTES,
+                backupCount=LOG_FILE_BACKUPS,
+                encoding="utf-8",
+            )
+        )
+    for handler in handlers:
+        handler.setFormatter(JsonFormatter())
+        handler.addFilter(RedactingFilter())
     root = logging.getLogger()
-    root.handlers[:] = [handler]
+    for old in root.handlers:
+        if isinstance(old, RotatingFileHandler):  # release the file of an earlier call
+            old.close()
+    root.handlers[:] = handlers
     root.setLevel(level)
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "mcp"):
         lg = logging.getLogger(name)

@@ -396,6 +396,7 @@ def create_server(
 
 
 def run_server(server: HealthServer) -> None:
-    configure_logging(server.deps.settings.log_level)
+    settings = server.deps.settings
+    configure_logging(settings.log_level, log_dir=settings.log_dir, name=server.name)
     logger.info("starting", extra={"server": server.name, "port": server.port})
     uvicorn.run(server.app, host=server.deps.settings.host, port=server.port, log_config=None)

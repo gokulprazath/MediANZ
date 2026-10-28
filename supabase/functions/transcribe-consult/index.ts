@@ -9,7 +9,13 @@
 //   duration_seconds  optional integer
 //
 // Secrets to set (supabase secrets set ...):
-//   STT_API_URL, STT_API_KEY, STT_MODEL   - your speech-to-text provider
+//   STT_API_URL          OpenAI-compatible transcription endpoint, e.g.
+//                        https://api.tokenfactory.nebius.com/v1/audio/transcriptions
+//   STT_API_KEY          provider API key
+//   STT_MODEL            speech-to-text model id from the provider's catalogue
+//   STT_ENGINE           optional engine name stored on the session (default "nebius")
+//   CORS_ALLOWED_ORIGIN  optional comma-separated web origins allowed to call this
+//                        function (e.g. the Flutter web app); "*" when not set
 // SUPABASE_URL, SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY are provided
 // automatically inside Supabase Edge Functions.
 
@@ -17,15 +23,25 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const MAX_AUDIO_BYTES = 50 * 1024 * 1024; // adjust to your plan's request limits
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+function corsHeaders(req: Request): Record<string, string> {
+  const allowed = (Deno.env.get("CORS_ALLOWED_ORIGIN") ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  const origin = req.headers.get("Origin") ?? "";
+  const allowOrigin = allowed.length === 0 ? "*" : allowed.includes(origin) ? origin : allowed[0];
+  return {
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Vary": "Origin",
+  };
+}
 
-function json(body: unknown, status = 200) {
+function json(req: Request, body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...corsHeaders(req), "Content-Type": "application/json" },
   });
 }
 
@@ -35,42 +51,78 @@ type SttResult = {
   language?: string;
 };
 
-// Replace the body of this function with your provider's API call.
-// Requirements for the provider: no retention of audio, ideally processing in
-// Australia, and a signed data-processing agreement.
+// The provider needs a file name with a matching extension to detect the format.
+const EXTENSIONS: Record<string, string> = {
+  "audio/webm": "webm",
+  "audio/ogg": "ogg",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/wave": "wav",
+  "audio/mp4": "m4a",
+  "audio/x-m4a": "m4a",
+  "audio/mpeg": "mp3",
+  "audio/flac": "flac",
+};
+
+function fileName(audio: Blob): string {
+  const mime = (audio.type || "").split(";")[0].trim().toLowerCase();
+  return `consult.${EXTENSIONS[mime] ?? "webm"}`;
+}
+
+// OpenAI-compatible /v1/audio/transcriptions (Nebius Token Factory or any other
+// compatible provider). Requirements for the provider: no retention of audio,
+// a known processing region, and a signed data-processing agreement.
 async function transcribe(audio: Blob): Promise<SttResult> {
+  const body = new FormData();
+  body.append("file", audio, fileName(audio));
+  body.append("model", Deno.env.get("STT_MODEL")!);
+  body.append("response_format", "verbose_json");
+  body.append("timestamp_granularities[]", "segment");
+
   const res = await fetch(Deno.env.get("STT_API_URL")!, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${Deno.env.get("STT_API_KEY")}`,
-      "Content-Type": audio.type || "application/octet-stream",
-    },
-    body: audio,
+    headers: { Authorization: `Bearer ${Deno.env.get("STT_API_KEY")}` },
+    body,
   });
   if (!res.ok) {
-    throw new Error(`Speech-to-text failed: ${res.status} ${await res.text()}`);
+    // Status only: the provider's error body can echo request details.
+    throw new Error(`Speech-to-text failed: ${res.status}`);
   }
-  // Map the provider's response shape to SttResult here.
+
   const data = await res.json();
-  return {
-    text: data.text,
-    segments: data.segments,
-    language: data.language ?? "en-AU",
-  };
+  const text = typeof data.text === "string" ? data.text.trim() : "";
+  if (!text) throw new Error("Speech-to-text returned no text");
+
+  const segments = Array.isArray(data.segments)
+    ? data.segments
+      .filter((s: { text?: unknown }) => typeof s.text === "string" && s.text.trim() !== "")
+      .map((s: { start?: number; end?: number; text: string }) => ({
+        start_sec: typeof s.start === "number" ? s.start : 0,
+        end_sec: typeof s.end === "number" ? s.end : 0,
+        text: s.text.trim(),
+      }))
+    : undefined;
+
+  // verbose_json reports a language name ("english"); keep a BCP 47 tag only.
+  const language = typeof data.language === "string" && /^[a-z]{2}(-[A-Z]{2})?$/.test(data.language)
+    ? data.language
+    : "en-AU";
+
+  return { text, segments: segments?.length ? segments : undefined, language };
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(req) });
+  if (req.method !== "POST") return json(req, { error: "Method not allowed" }, 405);
 
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader) return json({ error: "Missing Authorization header" }, 401);
+  if (!authHeader) return json(req, { error: "Missing Authorization header" }, 401);
 
   let form: FormData;
   try {
     form = await req.formData();
   } catch {
-    return json({ error: "Expected multipart/form-data" }, 400);
+    return json(req, { error: "Expected multipart/form-data" }, 400);
   }
 
   const appointmentId = form.get("appointment_id");
@@ -79,10 +131,10 @@ Deno.serve(async (req) => {
   const durationSeconds = durationRaw ? Number.parseInt(String(durationRaw), 10) : null;
 
   if (typeof appointmentId !== "string" || !(audio instanceof Blob)) {
-    return json({ error: "appointment_id and audio are required" }, 400);
+    return json(req, { error: "appointment_id and audio are required" }, 400);
   }
   if (audio.size === 0 || audio.size > MAX_AUDIO_BYTES) {
-    return json({ error: "Audio is empty or too large" }, 413);
+    return json(req, { error: "Audio is empty or too large" }, 413);
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -101,7 +153,7 @@ Deno.serve(async (req) => {
     { p_appointment_id: appointmentId },
   );
   if (startError || !sessionId) {
-    return json({ error: startError?.message ?? "Recording not allowed" }, 403);
+    return json(req, { error: startError?.message ?? "Recording not allowed" }, 403);
   }
 
   try {
@@ -114,9 +166,9 @@ Deno.serve(async (req) => {
         p_session_id: sessionId,
         p_transcript_text: result.text,
         p_segments: result.segments ?? null,
-        p_summary_text: null, // optional: generate a summary here before saving
+        p_summary_text: null, // key points are produced after the patient approves
         p_language: result.language ?? "en-AU",
-        p_engine: "your-stt-provider",
+        p_engine: Deno.env.get("STT_ENGINE") ?? "nebius",
         p_engine_model: Deno.env.get("STT_MODEL") ?? null,
         p_duration_seconds: Number.isFinite(durationSeconds) ? durationSeconds : null,
       },
@@ -125,16 +177,16 @@ Deno.serve(async (req) => {
 
     if (!transcriptId) {
       // Consent was withdrawn while transcribing; nothing was stored.
-      return json({ status: "discarded", reason: "consent_withdrawn" }, 409);
+      return json(req, { status: "discarded", reason: "consent_withdrawn" }, 409);
     }
 
-    return json({ transcript_id: transcriptId, status: "pending_patient_review" });
+    return json(req, { transcript_id: transcriptId, status: "pending_patient_review" });
   } catch (err) {
     await adminClient.rpc("mark_recording_failed", {
       p_session_id: sessionId,
       p_error: String(err),
     });
-    return json({ error: "Transcription failed" }, 502);
+    return json(req, { error: "Transcription failed" }, 502);
   }
   // `audio` goes out of scope here and is garbage-collected; it was never
   // written to Storage, disk or the database.
