@@ -65,6 +65,44 @@ The seed has no appointments today. To try consent and recording, check a
 patient in from **Staff → Visits → Open → Check in** (any booked visit), then
 open `/patient/appointments/<id>/live` and `/clinician/appointments/<id>`.
 
+## Part B: AI agent features
+
+| Screen | Who | Backend it uses |
+| --- | --- | --- |
+| `/patient/assistant` | Patient | Agent service `/chat` (records, insurance and fees agents) and `/chat/confirm` (sends a GP question only after the patient approves it); `gp_queries` for "My questions" |
+| `/patient/concierge` | Patient | Discovery API: problem text → ranked clinics with cost estimate → hold → book with the quoted gap |
+| `/clinician/review` and the appointment view | Clinician | `consult_key_points`, `clinical_facts`, `open_items`, `gp_queries`, `transcript_segments` and the approve / edit / reject / resolve / answer functions |
+| "I've arrived" on `/patient/appointments/<id>/live` | Patient | `patient_check_in` |
+| `/staff/operations` | Staff | `get_agent_activity`, `get_engine_activity`, `model_registry`, discovery research drafts |
+
+Server-only variables (never `NEXT_PUBLIC_`):
+
+| Variable | What it is |
+| --- | --- |
+| `AGENT_SERVICE_URL` | `python -m healthmcp.agent` (default `http://localhost:3108`) |
+| `DISCOVERY_SERVICE_URL` | `uvicorn healthmcp.discovery.app:app` (`http://localhost:3109` in the root README) |
+
+The browser only calls `/api/agents/...` on this site. That route forwards an
+allowlist of endpoints with the signed-in user's Supabase token, so the
+services and RLS decide access. In mock mode the same route answers offline
+with deterministic stand-ins (`src/lib/mock/agents.ts`).
+
+### Part B: live
+
+1. Run `supabase/migrations/20261030000000_partb_live_agents.sql` in the SQL
+   Editor (after every earlier migration and seeds 01–05).
+2. Start the MCP servers, the gateway, the agent service, the discovery API and
+   the consult-notes worker (root `Makefile`: `make servers`, `make gateway`,
+   `make agent`, `uv run uvicorn healthmcp.discovery.app:app --port 3109`,
+   `make consult-worker`).
+3. Set `NEXT_PUBLIC_DATA_MODE=live`, the Supabase URL and anon key, and the two
+   service URLs in `web/.env.local`, then `npm run dev`.
+4. Walk through: Olivia asks the assistant about her medication → approves the
+   GP question → Dr Rao opens the review queue (drafts appear once the worker
+   has processed Olivia's approved transcript) → approves the facts and answers
+   → Olivia sees the answer and the assistant now answers from the approved facts.
+   Jack books through the AI care finder. Staff open AI operations.
+
 ## Scripts
 
 ```bash

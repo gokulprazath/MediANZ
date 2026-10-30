@@ -91,4 +91,55 @@ One line per assumption. Spec: `docs/FRONTEND_SPEC_A_NOW.md`.
 - axe runs with WCAG 2.0/2.1/2.2 A and AA tags; the suite fails on any serious or critical violation.
 
 ## Part B (needs backend work, not built)
-- None found in this round: every Phase 4–7 screen works with the existing tables, RLS, RPCs and the Edge Function.
+- None found in Part A's phases 4–7: every screen worked with the existing tables, RLS, RPCs and the Edge Function.
+
+# Part B (hackathon scope: agent features visible in the app)
+
+## Scope
+- Built: patient AI assistant (B5), AI care finder (B4 + B5 booking), clinician review queue (B6), Realtime + self check-in (B1), staff AI operations (B8). Not built: staff clinic scoping and invites (B3), reminders and notifications (B2), public/private rating split (B7), care follow-ups (B8), voice input, red-team suite (B9). Reason: not visible in a demo.
+- Not tested against live Supabase or the Python services: this container has no Supabase credentials and the network policy blocks supabase.co. Mock mode covers the same contracts; live needs a manual run (README "Part B: live").
+
+## Backend added (one migration, `20261030000000_partb_live_agents.sql`)
+- Realtime publication gains `appointments`, `recording_consents`, `recording_sessions`, `gp_queries` (RLS applies to Realtime).
+- `patient_check_in(appointment_id)`: security definer, the appointment's patient only, 30 min before to 15 min after the start; the existing trigger records `checked_in_at`.
+- New policy: the appointment's patient reads their `gp_queries` (before, only the treating clinician and staff could), so "My questions" can show answers.
+- `get_agent_activity(hours)` / `get_engine_activity(hours)`: staff-only security-definer aggregates over `agent_access_log` / `decision_log` (counts, errors, latency; no ids or text). The logs themselves stay closed to `authenticated`.
+
+## Connecting to the agent services
+- The browser never calls the Python services directly: `/api/agents/...` (Next route handler) forwards an allowlist of endpoints with the user's Supabase access token. Allowed: agent `/chat`, `/chat/confirm`; discovery `/v1/services`, `/v1/discovery`, `/v1/availability`, `/v1/holds`, `/v1/bookings`, `/v1/research/drafts` (+ approve/reject). `/extract` and the research job are not exposed.
+- Service URLs are server-only env vars, `AGENT_SERVICE_URL` (agent.py, default port 3108) and `DISCOVERY_SERVICE_URL` (healthmcp.discovery.app, port 3109 in the root README). No CORS setup is needed on the services; the CSP is unchanged (same origin).
+- The proxy never logs request or response bodies (they can hold health questions). FastAPI `{detail}` errors are normalised to `{error}`.
+- Mock mode answers `/api/agents/...` from `lib/mock/agents.ts`: deterministic rules over the mock database with the same shapes and error codes (`NEEDS_SERVICE_CLARIFICATION`, `SLOT_TAKEN`, `QUOTE_CHANGED`, ...). It is a stand-in for tests and offline demos, not a model.
+- Money from the discovery API is a string (Pydantic Decimal); the UI formats it with `Intl` and never does arithmetic on it.
+
+## Patient AI assistant (`/patient/assistant`)
+- The agent service's deterministic router picks the agent; the UI labels each reply ("Records agent", "Insurance agent", "Fees and matching agent") with what it may do.
+- The GP-question draft is shown from the signed action token's body (base64url JSON: question, appointment, expiry; display only). The patient can approve or not send it; they can't edit it, because the service signs the exact text. To change it they ask again in their own words.
+- Conversation is page memory only (no browser storage); "Clear conversation" empties it. The emergency banner shows when the draft or any sent message contains emergency words.
+- "My questions" lists the patient's `gp_queries` with answers (new policy above), updated by Realtime in live mode.
+
+## AI care finder (`/patient/concierge`)
+- Uses the discovery API: problem text (or a chosen service) + location + radius → ranked clinics with the AI summary, cost breakdown (fee, Medicare rebate, insurance benefit, estimated gap), coverage note and "Why this clinic?" factor scores (bars with numbers, so not colour only).
+- Booking: hold → confirm card with countdown → `/v1/bookings` with `expected_fee`/`expected_gap` and a per-tap idempotency key. `QUOTE_CHANGED` shows the new price and needs another tap; `SLOT_TAKEN` searches again. Nothing books without the patient's tap.
+- The problem text is the booking reason; it stays in the find-care memory context like Part A's "What do you need help with?".
+- The page doesn't wrap the location picker in a form (the picker has its own).
+- Nav: "AI care finder" and "AI assistant" added; the map is now "Clinic map". Home gets "Find care with AI" next to the map button.
+
+## Clinician review queue (`/clinician/review`)
+- One shared component (`features/review/review-queue.tsx`) for the queue page and the appointment view. Order: urgent open items (by severity), patient questions, then each visit's open items, key points and facts.
+- Key points show confidence against the question's threshold ("below threshold" when lower) and the second opinion when present; edit uses the question's options (or text for explain questions).
+- Fact edit builds the jsonb value from the field's JSON Schema (object of strings/numbers, number, or enum); other schema shapes fall back to a text value.
+- "Show transcript evidence" loads `transcript_segments` and shows the cited segments (treating clinician only, by RLS).
+- Nav shows "Review queue (N)"; it polls every 15 s and, in live mode, refreshes on `consult_note_runs` and `gp_queries` changes.
+- The appointment view gains "Clinical record (AI drafted, clinician approved)": approved facts for the patient, approved key points of this visit, the consult-notes run status, and this visit's drafts.
+- Mock mode emulates the consult-notes worker: approving a transcript creates draft key points, facts and open items from keyword rules, so the demo flow works end to end. The seed already has drafts for Olivia's visit …0002 and one open question from her.
+
+## Realtime and self check-in
+- `useLiveQuery` takes optional `realtime` sources; in live mode it subscribes and refetches on change, and polling drops to a 30 s fallback. Mock mode still polls every 5 s.
+- Appointment-day page: "I've arrived" shows from 30 min before to 15 min after the start; otherwise it says when check-in opens or that it has closed.
+
+## AI operations (`/staff/operations`)
+- Totals (tool calls, error rate, items waiting, oldest wait), per-agent/tool table, engines with "May receive health data" / "No health data" from `model_registry`, the human review backlog, and research drafts (approve/reject via the discovery API).
+
+## Tests
+- E2E port moved from 3100 to 3200, because the MCP gateway uses 3100.
