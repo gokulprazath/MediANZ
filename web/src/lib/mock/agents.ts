@@ -65,15 +65,37 @@ export function resolveService(code: string | null | undefined, problem: string 
 }
 
 // agent.py route_question: the router, not the model, picks the agent.
-const INSURANCE = ["insurance", "cover", "coverage", "rebate", "extras", "oshc", "overseas", "policy", "health fund", "claim"];
-const INSIGHTS = ["my result", "my health", "my record", "my observation", "approved fact", "blood", "cholesterol", "diagnosis", "medication", "symptom", "my gp", "my doctor", "question for", "supplement", "iron", "tablet", "allerg"];
-const EXPLAINER = ["score", "why was", "why is", "explain the match", "explain this match", "explain the recommend", "fee", "fees", "cost", "price", "expensive", "cheaper", "breakdown"];
+const INSURANCE = ["insurance", "cover", "coverage", "covered", "covers", "rebate", "extras", "oshc", "overseas", "policy", "premium", "health fund", "out of pocket", "out-of-pocket", "claim", "claims"];
+const INSIGHTS = [
+  "my result", "my results", "my health", "my record", "my observation", "approved fact", "blood", "bloods", "blood pressure",
+  "cholesterol", "diagnosis", "medication", "medicine", "symptom", "symptoms", "my gp", "my doctor", "question for",
+  // clinical worries: answered from the record or passed to the clinician
+  "tired", "tiredness", "fatigue", "dose", "dosage", "side effect", "side effects", "feel", "feeling", "worse", "pain",
+  "iron", "supplement", "tablet", "tablets", "weight", "test result", "test results", "should i", "is it normal", "is it safe",
+  "my last visit", "allergy", "allergic", "allergies",
+];
+const BOOKING_WORD = /\b(book|booking)\b/;
+const BOOKING = ["make an appointment", "schedule an appointment", "get an appointment", "an appointment with", "appointment for", "see a gp", "see a doctor", "next available", "free slot", "available time", "available appointment"];
+const EXPLAINER = ["score", "scores", "why was", "why is", "explain the match", "explain this match", "explain the recommend", "fee", "fees", "cost", "costs", "price", "prices", "expensive", "cheaper", "breakdown"];
 
-export function routeQuestion(message: string): AgentRole {
-  const text = message.toLowerCase().split(/\s+/).join(" ");
-  if (INSURANCE.some((m) => text.includes(m))) return "insurance";
-  if (INSIGHTS.some((m) => text.includes(m))) return "insights";
-  if (EXPLAINER.some((m) => text.includes(m))) return "explainer";
+// Whole words or phrases only: "fee" matches "fees?" but never "coffee" or "feeling".
+const hasMarker = (text: string, markers: string[]) =>
+  markers.some((m) => new RegExp(`(?<!\\w)${m.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?!\\w)`).test(text));
+
+function routeText(text: string): AgentRole | null {
+  if (hasMarker(text, INSURANCE)) return "insurance";
+  if (BOOKING_WORD.test(text) || hasMarker(text, BOOKING)) return "booking";
+  if (hasMarker(text, INSIGHTS)) return "insights";
+  if (hasMarker(text, EXPLAINER)) return "explainer";
+  return null;
+}
+
+/** A follow-up with no markers ("yes please") goes where the latest earlier patient message went. */
+export function routeQuestion(message: string, earlier: string[] = []): AgentRole {
+  for (const text of [message, ...[...earlier].reverse()]) {
+    const role = routeText(text.toLowerCase().split(/\s+/).join(" "));
+    if (role) return role;
+  }
   return "insights";
 }
 
@@ -127,7 +149,10 @@ export async function handleMockAgentRequest(
       const message = typeof b.message === "string" ? b.message.trim() : "";
       if (!message || message.length > 8000) return err(422, "invalid_request");
       if (!patient) return err(401, "unauthorized");
-      const agent = routeQuestion(message);
+      const earlier = Array.isArray(b.history)
+        ? (b.history as { role?: unknown; text?: unknown }[]).filter((t) => t.role === "patient" && typeof t.text === "string").map((t) => t.text as string)
+        : [];
+      const agent = routeQuestion(message, earlier);
       return { status: 200, body: await chat(state, api, patient.id, agent, message, log) };
     }
     if (path === "/chat/confirm") {
@@ -312,6 +337,41 @@ async function chat(
         VERIFY_WARNING,
       ].join(" "),
     );
+  }
+
+  if (agent === "booking") {
+    // find_gp_candidates -> propose_booking: the soonest free GP time in 14 days.
+    log("booking", "matching", "find_gp_candidates", true, 240);
+    const at = new Date().toISOString();
+    const until = new Date(Date.now() + 14 * 86_400_000).toISOString();
+    const gps = new Set(state.clinicians.filter((c) => c.clinician_type === "gp").map((c) => c.id));
+    const slot = state.appointment_slots
+      .filter((s) => s.status === "available" && s.starts_at > at && s.starts_at < until && gps.has(s.clinician_id))
+      .sort((a, b) => a.starts_at.localeCompare(b.starts_at))[0];
+    if (!slot) return reply("I couldn't find a free GP time in the next two weeks. Try Find care to search further away or later.");
+    const clinician = state.clinicians.find((c) => c.id === slot.clinician_id)!;
+    const facility = state.facilities.find((f) => f.id === slot.facility_id)!;
+    log("booking", "booking", "propose_booking", true, 140);
+    const proposal = {
+      id: crypto.randomUUID(),
+      patient_id: patientId,
+      slot_id: slot.id,
+      reason: message.slice(0, 500),
+      status: "pending" as const,
+      expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+      created_by_agent: "booking",
+      result_appointment_id: null,
+    };
+    state.agent.booking_proposals.push(proposal);
+    const when = formatDateTime(slot.starts_at, facility.timezone);
+    return {
+      ...reply(`The soonest GP time is ${when} with ${clinicianName(clinician)} at ${facility.name}. Nothing is booked yet: tap Confirm to book it.`),
+      booking_proposal: {
+        proposal_id: proposal.id,
+        summary: `Book ${clinicianName(clinician)} at ${facility.name}, ${facility.suburb}, ${when}.`,
+        expires_at: proposal.expires_at,
+      },
+    };
   }
 
   if (agent === "explainer") {

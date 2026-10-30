@@ -232,3 +232,25 @@ New decisions are appended; old decisions are not silently rewritten.
   fake uses fixed ids `a1000000-0000-4000-8000-0000000000<plan><category>`.
 - The fake booking repository follows `hold_slot` / `get_available_slots`: a live hold
   by another patient makes the slot unavailable until it expires, and the holder may renew.
+- Every SLM call (extraction, SLM decisions, research, and the agent while it falls back to the
+  SLM model) sends `chat_template_kwargs: {enable_thinking: false}` unless `SLM_DISABLE_THINKING=false`:
+  live, Nemotron-3.5-Lightning spent ~6k reasoning tokens (~29s) per extraction and hit the 30s timeout.
+- `request_gp_query_approval` takes an optional `appointment_id` (accepted only if it is in the
+  patient's own `get_appointments`); without one it uses the only appointment, else the most recent
+  completed one, else returns the choices. Before, it needed exactly one appointment on the account,
+  so no patient with history could ask. Confirm checks the appointment is still the patient's.
+- Agent role `booking` (user mode): `find_gp_candidates`, `get_available_slots`, `propose_booking`
+  only. The router sends `book`/`booking` and appointment-request phrases to it (after insurance).
+  `/chat` returns the proposal (`booking_proposal`); the agent can propose once per message and
+  never confirms: `confirm_booking_proposal` stays app-only, as in spec 6.
+- SLM calls time out after `SLM_TIMEOUT_SECONDS` (default 60, was a fixed 30): live, the serverless
+  Nemotron-3.5-Lightning queued trivial calls for 45-85 s under load, failing whole consult-notes runs.
+- Agent router markers match whole words ("fee" no longer catches "coffee"/"feeling"), with clinical-worry
+  markers (tired, dose, side effects, "should I", "is it normal"...) going to insights. A message with no
+  markers routes like the patient's latest earlier message (follow-ups such as "yes please").
+- `/chat` takes `history` (up to 12 earlier turns, kept in the page only) and every user-mode agent gets
+  `today` and `time_zone` (`AGENT_TIME_ZONE`, default Australia/Brisbane): live, agents guessed the date from
+  training data and read Olivia's previous insurance policy. Observations carry `observed_local_date`.
+- Insights safety net: when its answer says the record doesn't answer the question and it prepared no GP
+  query, the service prepares one in the patient's own words for the clinician of the most recent completed
+  visit (still sent only on the patient's approval). Leaked model reasoning (`<think>`) is stripped from answers.

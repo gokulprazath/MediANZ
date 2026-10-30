@@ -1,6 +1,6 @@
 // Part B agent features in mock mode (offline stand-ins for the agent service
 // and discovery API, same contracts): patient assistant -> GP question ->
-// clinician review queue -> answer; AI care finder booking; AI operations.
+// clinician review queue -> answer; AI care finder booking (Find care); assistant booking; AI operations.
 import { expect, test } from "@playwright/test";
 import { ACCOUNTS, asUser, login, resetMock } from "./helpers";
 
@@ -46,12 +46,12 @@ test("assistant drafts a GP question; clinician approves the AI facts and answer
 
 test("AI care finder ranks clinics with cost and books after confirmation", async ({ page }) => {
   await login(page, ACCOUNTS.jack, /\/patient$/);
-  await page.goto("/patient/concierge");
+  await page.goto("/patient/find");
   await page.getByLabel("What do you need help with?").fill("My back has been sore for a week");
   await page.getByLabel("Or suburb / postcode").fill("4101");
   await page.getByRole("button", { name: "Set" }).click();
   await expect(page.getByText(/Showing distances from/)).toBeVisible();
-  await page.getByRole("button", { name: "Find care" }).click();
+  await page.getByRole("button", { name: "Find care with AI" }).click();
   await expect(page.getByRole("heading", { name: /Best matches for standard gp consultation/i })).toBeVisible();
   await expect(page.getByText("AI summary:").first()).toBeVisible();
   await expect(page.getByText("You pay (estimate)").first()).toBeVisible();
@@ -63,14 +63,46 @@ test("AI care finder ranks clinics with cost and books after confirmation", asyn
   await expect(page.getByRole("heading", { name: /You're booked in/ })).toBeVisible();
 });
 
+test("the assistant proposes a booking and books only on confirm", async ({ page }) => {
+  await login(page, ACCOUNTS.jack, /\/patient$/);
+  await page.goto("/patient/assistant");
+  await page.getByLabel("Your question").fill("Book me the next available GP appointment");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByText("Book this appointment?")).toBeVisible();
+  await expect(page.getByText(/Nothing is booked yet/)).toBeVisible();
+  await page.getByRole("button", { name: "Confirm booking" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Booked." })).toBeVisible();
+  await page.getByRole("link", { name: "See your booking" }).click();
+  await expect(page.getByRole("heading", { name: /You're booked in/ })).toBeVisible();
+});
+
+test("the conversation stays while the patient moves around and ends on sign-out", async ({ page }) => {
+  await login(page, ACCOUNTS.olivia, /\/patient$/);
+  await page.goto("/patient/assistant");
+  await page.getByLabel("Your question").fill("What medication did my GP start?");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByText("Send this question to your clinician?")).toBeVisible();
+  await expect(page.getByText(/^To Dr Asha Rao, about your visit on/)).toBeVisible();
+  // Leave through the nav (client-side) and come back: still there.
+  await page.getByRole("link", { name: "My appointments" }).click();
+  await page.getByRole("link", { name: "AI assistant" }).click();
+  await expect(page.getByRole("list", { name: "Conversation" }).getByText("What medication did my GP start?").first()).toBeVisible();
+  await expect(page.getByText("Send this question to your clinician?")).toBeVisible();
+  // Signing out clears it.
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await login(page, ACCOUNTS.olivia, /\/patient$/);
+  await page.getByRole("link", { name: "AI assistant" }).click();
+  await expect(page.getByText("Try asking:")).toBeVisible();
+});
+
 test("care finder asks which service when the problem is unclear", async ({ page }) => {
   await login(page, ACCOUNTS.jack, /\/patient$/);
-  await page.goto("/patient/concierge");
+  await page.goto("/patient/find");
   await page.getByLabel("What do you need help with?").fill("not sure");
   await page.getByLabel("Distance (km)").fill("25"); // the dermatologist is in Chermside, about 10 km away
   await page.getByLabel("Or suburb / postcode").fill("4101");
   await page.getByRole("button", { name: "Set" }).click();
-  await page.getByRole("button", { name: "Find care" }).click();
+  await page.getByRole("button", { name: "Find care with AI" }).click();
   await expect(page.getByRole("heading", { name: "Which of these do you need?" })).toBeVisible();
   await page.getByRole("button", { name: "Skin check" }).click();
   await expect(page.getByRole("heading", { name: /skin check/i })).toBeVisible();

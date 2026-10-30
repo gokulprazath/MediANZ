@@ -8,6 +8,7 @@ export const AGENT_LABEL: Record<AgentRole, { name: string; does: string }> = {
   explainer: { name: "Fees and matching agent", does: "Explains clinic scores and fees" },
   extractor: { name: "Documentation agent", does: "Drafts notes for your clinician to approve" },
   "insights-writer": { name: "Question writer", does: "Sends a question you approved" },
+  booking: { name: "Booking agent", does: "Finds a free time; books only when you confirm" },
 };
 
 export const SUGGESTIONS = [
@@ -15,4 +16,5 @@ export const SUGGESTIONS = [
   "What follow-up did my doctor arrange?",
   "Does my insurance cover a GP visit?",
   "Why are fees different between clinics?",
+  "Book me the next available GP appointment",
 ];

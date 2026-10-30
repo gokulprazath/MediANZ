@@ -2,7 +2,9 @@
 // Authentication from the browser. Live mode uses Supabase Auth; mock mode the
 // stand-in at /api/mock/auth. Screens only use this interface.
 import { IDLE_COOKIE } from "@/lib/auth/constants";
+import type { DemoRole } from "@/lib/auth/demo";
 import { IS_MOCK } from "@/lib/env";
+import { MOCK_PASSWORD, MOCK_TOTP_CODE } from "@/lib/mock/users";
 import { getBrowserSupabase } from "@/lib/supabase/browser";
 
 export interface MfaStatus {
@@ -25,6 +27,8 @@ export interface LinkResult {
 
 export interface AuthClient {
   signInWithPassword(email: string, password: string): Promise<void>;
+  /** Evaluator demo login: signs in as the role's sample account, MFA included. */
+  demoSignIn(role: DemoRole): Promise<void>;
   sendMagicLink(email: string, next: string): Promise<LinkResult>;
   sendPasswordReset(email: string): Promise<LinkResult>;
   updatePassword(password: string): Promise<void>;
@@ -56,6 +60,10 @@ const mockAuth: AuthClient = {
   async signInWithPassword(email, password) {
     await mockCall("signIn", { email, password });
   },
+  async demoSignIn(role) {
+    await mockCall("signIn", { email: role.email, password: MOCK_PASSWORD });
+    if (role.mfa) await mockCall("mfaVerify", { code: MOCK_TOTP_CODE });
+  },
   sendMagicLink: (email, next) => mockCall("magicLink", { email, next }),
   sendPasswordReset: (email) => mockCall("resetPassword", { email }),
   async updatePassword(password) {
@@ -83,6 +91,22 @@ const liveAuth: AuthClient = {
   async signInWithPassword(email, password) {
     const { error } = await getBrowserSupabase().auth.signInWithPassword({ email, password });
     check(error);
+  },
+  async demoSignIn(role) {
+    // The server signs in and sets the session and demo cookies (no MFA step).
+    const res = await fetch("/api/demo-login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: role.id }),
+    });
+    if (!res.ok) {
+      const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new AuthError(
+        error === "demo_not_configured" || error === "demo_disabled"
+          ? "The demo account isn't set up on this deployment yet."
+          : "The demo sign-in didn't work. Please try again.",
+      );
+    }
   },
   async sendMagicLink(email, next) {
     const { error } = await getBrowserSupabase().auth.signInWithOtp({

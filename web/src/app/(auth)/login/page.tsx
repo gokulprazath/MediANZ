@@ -1,6 +1,7 @@
 "use client";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
+import { ClipboardList, Stethoscope, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
@@ -15,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getAuthClient, markActive } from "@/lib/auth/client";
 import { safeNext } from "@/lib/auth/constants";
+import { DEMO_LOGIN, DEMO_ROLES, type DemoRole, type DemoRoleId } from "@/lib/auth/demo";
 import { IS_MOCK } from "@/lib/env";
 import { friendlyError } from "@/lib/errors";
 import { DEMO_ACCOUNTS, MOCK_PASSWORD, MOCK_TOTP_CODE } from "@/lib/mock/users";
@@ -64,6 +66,77 @@ function PasswordForm({ next }: { next: string }) {
         {isSubmitting ? "Signing in…" : "Sign in"}
       </Button>
     </form>
+  );
+}
+
+const ROLE_ICON: Record<DemoRoleId, typeof UserRound> = {
+  patient: UserRound,
+  clinician: Stethoscope,
+  receptionist: ClipboardList,
+};
+
+function DemoLogin() {
+  const router = useRouter();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState<DemoRoleId | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const signIn = async (role: DemoRole) => {
+    setBusy(role.id);
+    setError(null);
+    try {
+      await getAuthClient().demoSignIn(role);
+      markActive();
+      qc.clear();
+      router.replace(role.home);
+      router.refresh();
+    } catch (err) {
+      setError(friendlyError(err));
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="grid gap-3">
+      <p className="text-sm text-muted-foreground">
+        For hackathon evaluators: choose a role to explore the app as that person, with every feature they can use. No
+        password or authenticator needed.
+      </p>
+      {error ? (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+      <ul className="grid gap-2" aria-label="Demo roles">
+        {DEMO_ROLES.map((role) => {
+          const Icon = ROLE_ICON[role.id];
+          return (
+            <li key={role.id}>
+              <button
+                type="button"
+                onClick={() => void signIn(role)}
+                disabled={busy !== null}
+                aria-describedby={`demo-${role.id}-details`}
+                className="grid w-full grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg border p-3 text-left transition-colors hover:border-primary hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60"
+              >
+                <Icon className="row-span-2 mt-0.5 size-5 text-primary" aria-hidden="true" />
+                <span className="font-medium">
+                  {busy === role.id ? `Signing in as ${role.label.toLowerCase()}…` : `Continue as ${role.label}`}
+                </span>
+                <span id={`demo-${role.id}-details`} className="grid gap-1 text-sm text-muted-foreground">
+                  <span>{role.person}</span>
+                  <span className="text-xs">{role.highlights.join(" · ")}</span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="text-xs text-muted-foreground">
+        Sample data only, shared by everyone using the demo: changes you make (bookings, approvals, answers) are visible to
+        other evaluators.
+      </p>
+    </div>
   );
 }
 
@@ -129,10 +202,11 @@ function LoginInner() {
               <AlertDescription>{reason}</AlertDescription>
             </Alert>
           ) : null}
-          <Tabs defaultValue="password">
+          <Tabs defaultValue={DEMO_LOGIN && params.has("demo") ? "demo" : "password"}>
             <TabsList className="w-full">
               <TabsTrigger value="password">Password</TabsTrigger>
               <TabsTrigger value="magic">Email link</TabsTrigger>
+              {DEMO_LOGIN ? <TabsTrigger value="demo">Demo account</TabsTrigger> : null}
             </TabsList>
             <TabsContent value="password" className="pt-4">
               <PasswordForm next={next} />
@@ -140,6 +214,11 @@ function LoginInner() {
             <TabsContent value="magic" className="pt-4">
               <MagicLinkForm next={next} />
             </TabsContent>
+            {DEMO_LOGIN ? (
+              <TabsContent value="demo" className="pt-4">
+                <DemoLogin />
+              </TabsContent>
+            ) : null}
           </Tabs>
           <div className="flex flex-wrap justify-between gap-2 text-sm">
             <Link href="/reset-password" className="text-primary underline-offset-2 hover:underline">

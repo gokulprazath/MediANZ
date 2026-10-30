@@ -254,6 +254,12 @@ export function createLiveApi(sb: SupabaseClient): DataApi {
     async rescheduleAppointment(id, newSlotId) {
       return unwrap(await sb.rpc("reschedule_appointment", { p_appointment_id: id, p_new_slot_id: newSlotId }));
     },
+    async confirmBookingProposal(id) {
+      return unwrap(await sb.rpc("confirm_booking_proposal", { p_proposal_id: id }));
+    },
+    async declineBookingProposal(id) {
+      unwrap(await sb.rpc("decline_booking_proposal", { p_proposal_id: id }));
+    },
 
     // slots
     async getSlot(id) {

@@ -124,6 +124,15 @@ describe("mock agents", () => {
     expect(routeQuestion("Does my insurance cover this?")).toBe("insurance");
     expect(routeQuestion("What medication did my GP start?")).toBe("insights");
     expect(routeQuestion("Why is this clinic's fee higher?")).toBe("explainer");
+    expect(routeQuestion("Can you book me in with a GP tomorrow?")).toBe("booking");
+    expect(routeQuestion("Is a booking covered by my insurance?")).toBe("insurance");
+    expect(routeQuestion("When is my next appointment?")).toBe("insights");
+    // Whole words: "fee" never catches "coffee" or "feeling".
+    expect(routeQuestion("Can I drink coffee with my iron tablets?")).toBe("insights");
+    expect(routeQuestion("Why have I been feeling so tired?")).toBe("insights");
+    // Follow-ups route like the earlier patient message.
+    expect(routeQuestion("yes please", ["Book me a GP on Friday"])).toBe("booking");
+    expect(routeQuestion("thanks")).toBe("insights");
     expect(resolveService(null, "I'd like a skin check for a mole")?.code).toBe("skin_check");
     expect(resolveService(null, "need my flu shot")?.code).toBe("vaccination");
     expect(resolveService(null, "something odd")).toBeNull();
@@ -150,6 +159,27 @@ describe("mock agents", () => {
     const again = (await handleMockAgentRequest(state, authId(1), "/chat", "POST", { message: "What medication did my GP start?" }, q)).body as ChatResponse;
     expect(again.pending_action).toBeNull();
     expect(again.answer).toContain("Iron supplement");
+  });
+
+  it("proposes a booking that only the patient's confirm books", async () => {
+    const q = new URLSearchParams();
+    const before = state.appointments.length;
+    const chat = (await handleMockAgentRequest(state, authId(2), "/chat", "POST", { message: "Book me the next available GP appointment" }, q))
+      .body as ChatResponse;
+    expect(chat.agent).toBe("booking");
+    const proposal = chat.booking_proposal!;
+    expect(proposal.summary).toMatch(/^Book /);
+    expect(state.appointments.length).toBe(before); // proposing books nothing
+    await expect(olivia.confirmBookingProposal(proposal.proposal_id)).rejects.toThrow(/Proposal not found/);
+    const appointmentId = await jack.confirmBookingProposal(proposal.proposal_id);
+    expect(state.appointments.length).toBe(before + 1);
+    expect(state.appointments.find((a) => a.id === appointmentId)?.patient_id).toBe(PAT(2));
+    await expect(jack.confirmBookingProposal(proposal.proposal_id)).rejects.toThrow(/no longer pending/);
+
+    const next = (await handleMockAgentRequest(state, authId(2), "/chat", "POST", { message: "book a GP" }, q)).body as ChatResponse;
+    await jack.declineBookingProposal(next.booking_proposal!.proposal_id);
+    await expect(jack.confirmBookingProposal(next.booking_proposal!.proposal_id)).rejects.toThrow(/no longer pending/);
+    expect(state.appointments.length).toBe(before + 1);
   });
 
   it("discovers, holds and books with the quoted gap, idempotently", async () => {

@@ -30,6 +30,19 @@ npm run dev                  # http://localhost:3000
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` or `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | live | The anon / publishable key. The service role key is never used. |
 | `NEXT_PUBLIC_GOOGLE_MAPS_KEY` | no | Maps JavaScript API key, restricted by HTTP referrer. Without it the finder shows the list view and a note. |
 | `NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID` | no | Map id for advanced markers (defaults to Google's `DEMO_MAP_ID`). |
+| `NEXT_PUBLIC_DEMO_LOGIN` | no | `true` shows "Demo account" on the login page in live mode (mock mode always shows it). |
+| `DEMO_LOGIN_ENABLED`, `DEMO_PASSWORD` | demo login | Server-only: turn the live demo login on, and the demo accounts' password. Optional `DEMO_PATIENT_EMAIL`, `DEMO_CLINICIAN_EMAIL`, `DEMO_RECEPTIONIST_EMAIL`. |
+
+### Demo login for evaluators
+
+The login page's **Demo account** tab (link straight to it with `/login?demo`) offers
+Patient (Olivia Brown), Clinician (Dr Asha Rao) and Receptionist (Southbank front desk),
+all at Southbank Family Medical. In live mode `/api/demo-login` signs in with the demo
+password (anon key, so RLS applies; no service role) and sets an HttpOnly `mz_demo`
+cookie. With it, the proxy lets the demo clinician and receptionist into `/clinician`
+and `/staff` without the MFA step; any other sign-in of those accounts still needs MFA.
+
+The data is shared: evaluators see each other's bookings, approvals and answers.
 
 `NEXT_PUBLIC_*` values are built into the browser bundle, so change them and rebuild.
 The transcription endpoint is derived from the Supabase URL
@@ -61,7 +74,8 @@ Password `medianz-demo` for all; clinicians and staff then enter the code `12345
 | `sophie.williams@example.com` | Clinician: Paddington GP Clinic |
 | `reception.southbank@example.com` | Staff (reception) |
 
-The seed has no appointments today. To try consent and recording, check a
+In live mode, `supabase/seed/07_olivia_demo_data.sql` gives Olivia a visit with Dr Rao that is
+already checked in (re-run it for a fresh one). In mock mode the seed has no appointments today. To try consent and recording, check a
 patient in from **Staff → Visits → Open → Check in** (any booked visit), then
 open `/patient/appointments/<id>/live` and `/clinician/appointments/<id>`.
 
@@ -70,7 +84,8 @@ open `/patient/appointments/<id>/live` and `/clinician/appointments/<id>`.
 | Screen | Who | Backend it uses |
 | --- | --- | --- |
 | `/patient/assistant` | Patient | Agent service `/chat` (records, insurance and fees agents) and `/chat/confirm` (sends a GP question only after the patient approves it); `gp_queries` for "My questions" |
-| `/patient/concierge` | Patient | Discovery API: problem text → ranked clinics with cost estimate → hold → book with the quoted gap |
+| `/patient/find` (Find care) | Patient | AI care finder and clinic map on one page. Discovery API: problem text → ranked clinics with cost estimate (numbered on the map) → hold → book with the quoted gap; or browse every clinic in range. `/patient/concierge` redirects here. |
+| `/patient/assistant` booking | Patient | Agent service `/chat` (booking agent: `find_gp_candidates`, `get_available_slots`, `propose_booking`); the patient's Confirm calls `confirm_booking_proposal` |
 | `/clinician/review` and the appointment view | Clinician | `consult_key_points`, `clinical_facts`, `open_items`, `gp_queries`, `transcript_segments` and the approve / edit / reject / resolve / answer functions |
 | "I've arrived" on `/patient/appointments/<id>/live` | Patient | `patient_check_in` |
 | `/staff/operations` | Staff | `get_agent_activity`, `get_engine_activity`, `model_registry`, discovery research drafts |
@@ -101,7 +116,7 @@ with deterministic stand-ins (`src/lib/mock/agents.ts`).
    GP question → Dr Rao opens the review queue (drafts appear once the worker
    has processed Olivia's approved transcript) → approves the facts and answers
    → Olivia sees the answer and the assistant now answers from the approved facts.
-   Jack books through the AI care finder. Staff open AI operations.
+   Jack books through Find care, and asks the assistant to book (Confirm on the card). Staff open AI operations.
 
 ## Scripts
 

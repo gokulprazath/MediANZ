@@ -28,7 +28,13 @@ test("front desk checks in; consent, recording, transcript review and feedback",
   // Clinician: consult view, consent, start consultation, record.
   const clinician = await asUser(browser, ACCOUNTS.sophie, /\/clinician$/);
   const c = clinician.page;
-  await c.goto(`/clinician/appointments/${id}`);
+  // The checked-in patient waits at the top of the calendar.
+  const waiting = c.getByRole("region", { name: "Checked in now" });
+  await expect(waiting.getByText("Priya")).toBeVisible();
+  await waiting.getByRole("link", { name: "Open consult" }).first().click();
+  await c.waitForURL(`**/clinician/appointments/${id}`);
+  // The patient's consent shows when and how it was given.
+  await expect(c.getByText(/in the app, consent wording v2/)).toBeVisible();
   await c.getByRole("button", { name: "Start consultation" }).click();
   await expect(c.getByText("In consultation").first()).toBeVisible();
   await c.getByRole("button", { name: "I agree to recording" }).click();

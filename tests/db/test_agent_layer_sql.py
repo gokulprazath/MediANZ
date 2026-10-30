@@ -206,9 +206,9 @@ def test_consent_withdrawal_removes_derived_data_and_strips_approved_sources(db:
         )
         == 0
     )
-    assert (
+    assert (  # open questions go; answered ones (seed 07) stay, as in spec 4.4
         db.val(
-            "select count(*) from public.gp_queries where appointment_id = %s",
+            "select count(*) from public.gp_queries where appointment_id = %s and status = 'open'",
             [OLIVIA_APPROVED_APPT],
         )
         == 0
@@ -331,7 +331,13 @@ def test_patient_sees_approved_facts_only_and_clinician_sees_own_appointments(db
     db.as_user("rao")
     visible = {str(r["id"]) for r in db.q("select id from public.clinical_facts")}
     assert {draft, approved} <= visible
-    assert db.val("select count(*) from public.open_items") == 1
+    # Her own appointments' items (the worker adds more on a live project).
+    assert (
+        db.val(
+            "select count(*) from public.open_items where idempotency_key = 'test-rls-item-0001'"
+        )
+        == 1
+    )
 
     db.as_user("williams")
     assert db.val("select count(*) from public.clinical_facts") == 0

@@ -71,8 +71,11 @@ select f.id as fact_id, f.appointment_id, f.field_id, f.field_version, cf.label,
 
 _VITALS = """
 select v.id, v.appointment_id, v.recorded_at, v.temperature_c, v.spo2_percent,
-       v.bp_systolic, v.bp_diastolic, v.height_cm, v.weight_kg, v.bmi
+       v.bp_systolic, v.bp_diastolic, v.height_cm, v.weight_kg, v.bmi,
+       (v.recorded_at at time zone fa.timezone)::date as observed_local_date
   from public.visit_vitals v
+  join public.appointments a on a.id = v.appointment_id
+  join public.facilities fa on fa.id = a.facility_id
  where v.patient_id = %(scope_patient_id)s
    and (%(date_from)s::date is null or v.recorded_at::date >= %(date_from)s::date)
    and (%(date_to)s::date is null or v.recorded_at::date <= %(date_to)s::date)
@@ -82,10 +85,12 @@ select v.id, v.appointment_id, v.recorded_at, v.temperature_c, v.spo2_percent,
 
 _OBSERVATION_FACTS = """
 select f.id as fact_id, f.appointment_id, f.field_id, f.value, f.unit,
-       a.scheduled_start as observed_at
+       a.scheduled_start as observed_at,
+       (a.scheduled_start at time zone fa.timezone)::date as observed_local_date
   from public.clinical_facts f
   join public.clinical_fields cf on cf.id = f.field_id and cf.version = f.field_version
   join public.appointments a on a.id = f.appointment_id
+  join public.facilities fa on fa.id = a.facility_id
  where f.patient_id = %(scope_patient_id)s
    and f.status = 'approved'
    and cf.topic = 'observation'
@@ -145,6 +150,7 @@ def vitals_observations(row: Row) -> list[Observation]:
     """One measured vitals row -> one observation per measurement taken."""
     base: dict[str, Any] = {
         "observed_at": row["recorded_at"],
+        "observed_local_date": row.get("observed_local_date"),
         "source": "measured",
         "appointment_id": row["appointment_id"],
     }
@@ -175,6 +181,7 @@ def fact_observation(row: Row) -> Observation:
         value=row["value"],
         unit=row.get("unit"),
         observed_at=row["observed_at"],
+        observed_local_date=row.get("observed_local_date"),
         source="transcript",
         appointment_id=row["appointment_id"],
         fact_id=row["fact_id"],
@@ -285,6 +292,7 @@ def sample_patient_record() -> FakePatientRecordData:
                 {
                     "appointment_id": appt,
                     "recorded_at": _T0.replace(hour=9),
+                    "observed_local_date": _T0.date(),
                     "temperature_c": 36.8,
                     "spo2_percent": 98,
                     "bp_systolic": 138,
@@ -304,6 +312,7 @@ def sample_patient_record() -> FakePatientRecordData:
                     "value": bp.value,
                     "unit": bp.unit,
                     "observed_at": _T0.replace(hour=9),
+                    "observed_local_date": _T0.date(),
                 }
             ]
         },

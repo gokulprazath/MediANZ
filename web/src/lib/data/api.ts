@@ -197,6 +197,9 @@ export interface DataApi {
   bookSlot(input: BookInput): Promise<Uuid>;
   cancelAppointment(id: Uuid, reason?: string | null): Promise<void>;
   rescheduleAppointment(id: Uuid, newSlotId: Uuid): Promise<Uuid>;
+  // booking proposals from the booking agent: only the owning patient confirms or declines
+  confirmBookingProposal(id: Uuid): Promise<Uuid>;
+  declineBookingProposal(id: Uuid): Promise<void>;
 
   // slots (table)
   getSlot(id: Uuid): Promise<AppointmentSlot | null>;
@@ -339,6 +342,8 @@ export const DATA_API_METHODS = [
   "bookSlot",
   "cancelAppointment",
   "rescheduleAppointment",
+  "confirmBookingProposal",
+  "declineBookingProposal",
   "getSlot",
   "listSlots",
   "setSlotBlocked",

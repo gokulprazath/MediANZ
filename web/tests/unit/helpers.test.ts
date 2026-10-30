@@ -1,12 +1,15 @@
 // Pure helpers: emergency words, directory, banner, .ics, reports, errors,
 // fees default and transcript turns.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { containsEmergencyWords } from "@/config/emergency";
 import { appointmentBanner, nextAppointment } from "@/features/appointments/banner";
 import { defaultGap } from "@/features/appointments/fees-form";
 import { speakerTurns, formatOffset } from "@/features/consult/transcript";
 import { buildDirectory, sortDirectory } from "@/features/find-care/directory";
+import { demoRole, DEMO_ROLES, isDemoSession } from "@/lib/auth/demo";
 import { DataError } from "@/lib/data/api";
+import { visibleHours } from "@/lib/time";
+import { historyFor, type Turn } from "@/features/assistant/conversation";
 import { friendlyError } from "@/lib/errors";
 import { buildIcs } from "@/lib/ics";
 import { buildSeed, CLIN, FAC } from "@/lib/mock/seed";
@@ -176,5 +179,73 @@ describe("speakerTurns", () => {
     ]);
     expect(formatOffset(905)).toBe("15:05");
     expect(formatOffset(3725)).toBe("1:02:05");
+  });
+});
+
+describe("demo login", () => {
+  it("offers patient, clinician and receptionist, with MFA for the last two", () => {
+    expect(DEMO_ROLES.map((r) => [r.id, r.home, r.mfa])).toEqual([
+      ["patient", "/patient", false],
+      ["clinician", "/clinician", true],
+      ["receptionist", "/staff", true],
+    ]);
+    expect(demoRole("admin")).toBeNull();
+  });
+
+  it("skips MFA only for a demo cookie on its own demo account, and only when enabled", async () => {
+    expect(isDemoSession("asha.rao@example.com", "clinician")).toBe(false); // mock mode: off
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_DATA_MODE", "live");
+    vi.stubEnv("DEMO_LOGIN_ENABLED", "true");
+    try {
+      const live = await import("@/lib/auth/demo");
+      expect(live.isDemoSession("Asha.Rao@example.com", "clinician")).toBe(true);
+      expect(live.isDemoSession("reception.southbank@example.com", "receptionist")).toBe(true);
+      expect(live.isDemoSession("asha.rao@example.com", "receptionist")).toBe(false); // cookie for another role
+      expect(live.isDemoSession("sophie.williams@example.com", "clinician")).toBe(false); // not a demo account
+      expect(live.isDemoSession("asha.rao@example.com", undefined)).toBe(false); // password sign-in: MFA as usual
+      expect(live.isDemoSession("asha.rao@example.com", "admin")).toBe(false);
+      vi.stubEnv("DEMO_LOGIN_ENABLED", "false");
+      expect(live.isDemoSession("asha.rao@example.com", "clinician")).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+});
+
+describe("visibleHours", () => {
+  const tz = "Australia/Brisbane"; // UTC+10, no daylight saving
+  it("keeps the usual 7 am to 8 pm day when every visit fits", () => {
+    expect(visibleHours([{ start: "2026-10-30T00:00:00Z", end: "2026-10-30T00:15:00Z" }], tz)).toEqual({
+      slotMinTime: "07:00:00",
+      slotMaxTime: "20:00:00",
+    });
+  });
+  it("widens to show evening and early visits", () => {
+    const evening = { start: "2026-10-30T12:20:00Z", end: "2026-10-30T12:35:00Z" }; // 10:20-10:35 pm
+    const early = { start: "2026-10-29T20:30:00Z", end: "2026-10-29T20:45:00Z" }; // 6:30-6:45 am
+    expect(visibleHours([evening, early], tz)).toEqual({ slotMinTime: "06:00:00", slotMaxTime: "23:00:00" });
+    expect(visibleHours([{ start: "2026-10-30T13:50:00Z", end: "2026-10-30T14:05:00Z" }], tz).slotMaxTime).toBe("24:00:00");
+  });
+});
+
+describe("assistant history", () => {
+  it("sends the last 12 patient and assistant turns, never errors", () => {
+    const turns: Turn[] = [
+      { id: 1, from: "patient", text: "What was my blood pressure?" },
+      { id: 2, from: "error", text: "Something went wrong." },
+      { id: 3, from: "agent", agent: "insights", text: "116/74.", pending: null, proposal: null },
+    ];
+    expect(historyFor(turns)).toEqual([
+      { role: "patient", text: "What was my blood pressure?" },
+      { role: "assistant", text: "116/74." },
+    ]);
+    const many: Turn[] = Array.from({ length: 20 }, (_, i) => ({ id: i, from: "patient", text: `q${i} ${"x".repeat(5000)}` }));
+    const sent = historyFor(many);
+    expect(sent).toHaveLength(12);
+    expect(sent[0].text.startsWith("q8 ")).toBe(true);
+    expect(sent.every((t) => t.text.length <= 2000)).toBe(true);
+    expect(JSON.stringify({ message: "x".repeat(2000), history: sent }).length).toBeLessThan(32 * 1024);
   });
 });

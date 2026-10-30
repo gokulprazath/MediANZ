@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -27,6 +28,7 @@ from healthmcp.agent import (
     GET_APPROVED_FACTS,
     AgentService,
     ChatRequest,
+    ChatTurn,
     ConfirmRequest,
     ExtractRequest,
     create_app,
@@ -165,6 +167,7 @@ async def test_each_role_binds_only_its_tools(factory: FakeFactory) -> None:
         "explainer": "why was this GP recommended and what are the fees",
         "insights": "what do my results say about my cholesterol",
         "insurance": "what is my insurance coverage for this fee",
+        "booking": "book me a GP appointment this week",
     }
     for role, message in messages.items():
         model = ScriptedChatModel(responses=[AIMessage(content="ok")])
@@ -187,6 +190,11 @@ def test_router_keeps_roles_separate() -> None:
     assert route_question("how much does the fee cost") == "explainer"
     assert route_question("what do my results say about my cholesterol") == "insights"
     assert route_question("hello") == "insights"
+    assert route_question("Can you book me in with a GP tomorrow?") == "booking"
+    assert route_question("I need an appointment for a skin check") == "booking"
+    assert route_question("is a booking covered by my insurance") == "insurance"
+    assert route_question("when is my next appointment") == "insights"
+    assert route_question("what does my facebook say") == "insights"
 
 
 async def test_insights_prepares_a_signed_action_without_writing(factory: FakeFactory) -> None:
@@ -330,24 +338,83 @@ async def test_expired_action_is_rejected(factory: FakeFactory) -> None:
         await service.confirm(user_token(OLIVIA), ConfirmRequest(action=chat.pending_action))
 
 
-async def test_gp_query_needs_exactly_one_appointment(factory: FakeFactory) -> None:
-    factory.responses[GET_APPOINTMENTS] = {
-        "appointments": [
-            {"appointment_id": str(APPOINTMENT)},
-            {"appointment_id": str(uuid.uuid4())},
-        ]
+def _appointment(appointment: UUID, status: str, start: str) -> dict[str, Any]:
+    return {
+        "appointment_id": str(appointment),
+        "status": status,
+        "scheduled_start": start,
+        "clinician_name": "Dr Asha Rao",
     }
+
+
+async def _gp_query(factory: FakeFactory, arguments: dict[str, Any]) -> Any:
     model = ScriptedChatModel(
         responses=[
-            _tool_call("request_gp_query_approval", {"question": "A question"}),
-            AIMessage(content="Which appointment?"),
+            _tool_call("request_gp_query_approval", {"question": "A question", **arguments}),
+            AIMessage(content="Prepared."),
         ]
     )
     service = _service(model, factory)
-    response = await service.chat(
+    chat = await service.chat(
         user_token(OLIVIA), ChatRequest(message="what do my results say about my cholesterol")
     )
-    assert response.pending_action is None
+    return service, chat
+
+
+async def test_gp_query_defaults_to_the_latest_completed_appointment(factory: FakeFactory) -> None:
+    older, no_show = uuid.uuid4(), uuid.uuid4()
+    factory.responses[GET_APPOINTMENTS] = {
+        "appointments": [
+            _appointment(older, "completed", "2026-06-20T00:00:00Z"),
+            _appointment(APPOINTMENT, "completed", "2026-10-13T00:00:00Z"),
+            _appointment(no_show, "no_show", "2026-10-28T00:00:00Z"),
+        ]
+    }
+    service, chat = await _gp_query(factory, {})
+    assert chat.appointment_id == str(APPOINTMENT)
+    await service.confirm(user_token(OLIVIA), ConfirmRequest(action=chat.pending_action))
+    assert [name for name, _ in factory.calls].count(CREATE_GP_QUERY) == 1
+
+
+async def test_gp_query_uses_a_chosen_appointment_of_the_patients(factory: FakeFactory) -> None:
+    chosen = uuid.uuid4()
+    factory.responses[GET_APPOINTMENTS] = {
+        "appointments": [
+            _appointment(APPOINTMENT, "completed", "2026-10-13T00:00:00Z"),
+            _appointment(chosen, "booked", "2026-11-13T00:00:00Z"),
+        ]
+    }
+    _, chat = await _gp_query(factory, {"appointment_id": str(chosen)})
+    assert chat.appointment_id == str(chosen)
+
+
+@pytest.mark.parametrize("requested", [str(uuid.uuid4()), "not-a-uuid", None])
+async def test_gp_query_without_a_usable_appointment_asks(
+    factory: FakeFactory, requested: str | None
+) -> None:
+    # Someone else's appointment id, garbage, or no completed visit to default to.
+    factory.responses[GET_APPOINTMENTS] = {
+        "appointments": [
+            _appointment(APPOINTMENT, "booked", "2026-11-13T00:00:00Z"),
+            _appointment(uuid.uuid4(), "booked", "2026-11-20T00:00:00Z"),
+        ]
+    }
+    _, chat = await _gp_query(factory, {"appointment_id": requested} if requested else {})
+    assert chat.pending_action is None
+    assert all(name != CREATE_GP_QUERY for name, _ in factory.calls)
+
+
+async def test_confirm_refuses_an_appointment_no_longer_on_the_account(
+    factory: FakeFactory,
+) -> None:
+    factory.responses[GET_APPOINTMENTS] = {
+        "appointments": [_appointment(APPOINTMENT, "completed", "2026-10-13T00:00:00Z")]
+    }
+    service, chat = await _gp_query(factory, {})
+    assert chat.pending_action is not None
+    factory.responses[GET_APPOINTMENTS] = {"appointments": []}
+    with pytest.raises(AuthError):
+        await service.confirm(user_token(OLIVIA), ConfirmRequest(action=chat.pending_action))
     assert all(name != CREATE_GP_QUERY for name, _ in factory.calls)
 
 
@@ -439,3 +506,142 @@ def test_action_payload_is_json_serialisable(factory: FakeFactory) -> None:
     payload = json.loads(base64.urlsafe_b64decode(padded))
     assert payload["sub"] == str(OLIVIA)
     assert payload["appointment_id"] == str(APPOINTMENT)
+
+
+PROPOSAL = UUID("55555555-5555-5555-5555-555555555555")
+PROPOSE_BOOKING = "booking__propose_booking"
+
+
+def _proposal() -> dict[str, Any]:
+    return {
+        "proposal_id": str(PROPOSAL),
+        "kind": "book",
+        "summary": "Book Dr Asha Rao at Southbank Family Medical, Mon 2 Nov 9:00 am.",
+        "status": "pending",
+        "expires_at": "2026-11-01T22:10:00Z",
+    }
+
+
+async def test_booking_returns_the_proposal_card_and_never_books(factory: FakeFactory) -> None:
+    factory.responses[PROPOSE_BOOKING] = _proposal()
+    slot = str(uuid.uuid4())
+    model = ScriptedChatModel(
+        responses=[
+            _tool_call("booking__propose_booking", {"slot_id": slot, "reason": "check-up"}),
+            _tool_call("booking__propose_booking", {"slot_id": str(uuid.uuid4())}),
+            AIMessage(content="Tap Confirm to book Dr Rao on Monday at 9 am."),
+        ]
+    )
+    service = _service(model, factory)
+    response = await service.chat(user_token(OLIVIA), ChatRequest(message="book me a GP"))
+    assert response.agent == "booking"
+    assert response.booking_proposal is not None
+    assert response.booking_proposal.proposal_id == PROPOSAL
+    assert response.booking_proposal.summary.startswith("Book Dr Asha Rao")
+    # Only one proposal per message reaches the booking server.
+    assert [args for name, args in factory.calls if name == PROPOSE_BOOKING] == [
+        {"slot_id": slot, "reason": "check-up"}
+    ]
+    assert response.pending_action is None
+
+
+async def test_booking_prompt_carries_today(factory: FakeFactory) -> None:
+    model = ScriptedChatModel(responses=[AIMessage(content="No free times.")])
+    service = _service(model, factory, clock=lambda: 1_793_000_000.0)
+    response = await service.chat(user_token(OLIVIA), ChatRequest(message="book a GP"))
+    assert response.booking_proposal is None
+    payload = AgentService._prompt_payload("x", [], [], today=date(2026, 10, 30))
+    assert json.loads(payload)["today"] == "2026-10-30"
+
+
+def test_router_matches_whole_words_and_clinical_worries() -> None:
+    # "fee" must not catch "coffee", "feel" or "feeling".
+    assert route_question("Can I drink coffee with my iron tablets?") == "insights"
+    assert route_question("Why have I been feeling so tired?") == "insights"
+    assert route_question("Should I double my dose because I feel worse?") == "insights"
+    assert route_question("Why are fees different between clinics?") == "explainer"
+    assert route_question("Is a long consult covered by my health fund?") == "insurance"
+
+
+def test_follow_ups_route_like_the_earlier_message() -> None:
+    assert route_question("yes please", ["Book me a GP on Friday"]) == "booking"
+    assert route_question("ok", ["what costs more", "hello"]) == "explainer"
+    assert route_question("thanks") == "insights"
+    # The current message wins when it has its own markers.
+    assert route_question("what does my insurance cover?", ["book a GP"]) == "insurance"
+
+
+async def test_user_roles_get_today_time_zone_and_the_conversation(factory: FakeFactory) -> None:
+    class Recording(ScriptedChatModel):
+        prompts: list[str] = Field(default_factory=list)
+
+        def _generate(self, messages: list[BaseMessage], *args: Any, **kwargs: Any) -> ChatResult:
+            self.prompts.append(str(messages[-1].content))
+            return super()._generate(messages, *args, **kwargs)
+
+    model = Recording(responses=[AIMessage(content="ok")])
+    service = _service(model, factory, clock=lambda: 1_793_404_800.0)  # 2026-10-30 23:00 UTC
+    history = [
+        ChatTurn(role="patient", text="What was my blood pressure?"),
+        ChatTurn(role="assistant", text="116/74 at your last visit."),
+    ]
+    response = await service.chat(
+        user_token(OLIVIA), ChatRequest(message="and before that?", history=history)
+    )
+    assert response.agent == "insights"  # routed by the earlier patient message
+    payload = json.loads(model.prompts[0])
+    assert payload["today"] == "2026-10-31"  # Brisbane is already on the 31st
+    assert payload["time_zone"] == "Australia/Brisbane"
+    assert payload["earlier_conversation"] == [
+        {"from": "patient", "text": "What was my blood pressure?"},
+        {"from": "assistant", "text": "116/74 at your last visit."},
+    ]
+
+
+async def test_unanswered_records_question_goes_to_the_last_clinician(factory: FakeFactory) -> None:
+    factory.responses[GET_APPOINTMENTS] = {
+        "appointments": [
+            {
+                **_appointment(APPOINTMENT, "completed", "2026-10-15T23:30:00Z"),
+                "local_start": "2026-10-16T09:30:00",
+            },
+            _appointment(uuid.uuid4(), "checked_in", "2026-10-30T12:20:00Z"),
+        ]
+    }
+    # The model says the record doesn't answer it, but prepares nothing itself.
+    model = ScriptedChatModel(
+        responses=[AIMessage(content="I don't see any documented follow-up in your record.")]
+    )
+    service = _service(model, factory)
+    chat = await service.chat(
+        user_token(OLIVIA), ChatRequest(message="What follow-up did my doctor arrange?")
+    )
+    assert chat.agent == "insights"
+    assert chat.appointment_id == str(APPOINTMENT)
+    assert "I've prepared your question for Dr Asha Rao from your visit on 16 October 2026" in (
+        chat.answer
+    )
+    await service.confirm(user_token(OLIVIA), ConfirmRequest(action=chat.pending_action))
+    [created] = [args for name, args in factory.calls if name == CREATE_GP_QUERY]
+    assert created["question"] == "What follow-up did my doctor arrange?"
+
+
+async def test_answered_records_question_prepares_nothing(factory: FakeFactory) -> None:
+    factory.responses[GET_APPOINTMENTS] = {
+        "appointments": [_appointment(APPOINTMENT, "completed", "2026-10-15T23:30:00Z")]
+    }
+    model = ScriptedChatModel(responses=[AIMessage(content="Your blood pressure was 116/74.")])
+    chat = await _service(model, factory).chat(
+        user_token(OLIVIA), ChatRequest(message="What was my blood pressure?")
+    )
+    assert chat.pending_action is None
+
+
+async def test_leaked_reasoning_never_reaches_the_patient(factory: FakeFactory) -> None:
+    leaked = "Second entry is 108/68. Provide answer.\n</think>\nOn 25 September it was 108/68."
+    for text in (leaked, "<think>check the list</think>On 25 September it was 108/68."):
+        model = ScriptedChatModel(responses=[AIMessage(content=text)])
+        chat = await _service(model, factory).chat(
+            user_token(OLIVIA), ChatRequest(message="What was my blood pressure?")
+        )
+        assert chat.answer == "On 25 September it was 108/68."

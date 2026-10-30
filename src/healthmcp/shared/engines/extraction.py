@@ -160,7 +160,7 @@ def slm_client(settings: Settings) -> Any:
         base_url=settings.slm_base_url,
         api_key=settings.slm_api_key.get_secret_value(),
         max_retries=0,  # no hidden retries: validated_call retries once on a bad result
-        timeout=30.0,
+        timeout=settings.slm_timeout_seconds,
     )
 
 
@@ -169,6 +169,7 @@ class OpenAICompatibleEngine:
         self._client = slm_client(settings)
         self.info = _info(entry).model_copy(update={"model": settings.slm_model})
         self._model = settings.slm_model
+        self._extra_body = settings.slm_extra_body
 
     async def extract(self, field: ClinicalField, segments: Sequence[Segment]) -> ExtractedValue:
         payload = {
@@ -193,6 +194,7 @@ class OpenAICompatibleEngine:
                     "type": "json_schema",
                     "json_schema": {"name": "extracted_value", "schema": _response_schema(field)},
                 },
+                extra_body=self._extra_body,
             )
             raw = json.loads(response.choices[0].message.content or "null")
             return repair_offsets(raw, segments)

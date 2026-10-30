@@ -143,7 +143,7 @@ function FindCare() {
           <LocationPicker />
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => router.push("/patient/concierge")}>
+          <Button onClick={() => router.push("/patient/find?ai=1")}>
             <Sparkles aria-hidden="true" />
             Find care with AI
           </Button>
