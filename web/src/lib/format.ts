@@ -5,6 +5,7 @@ import type {
   ClaimStatus,
   ClinicianType,
   FacilityType,
+  ModerationStatus,
   RecordingStatus,
   RegistrationStatus,
   ResidencyCategory,
@@ -64,6 +65,12 @@ export const RECORDING_STATUS_LABEL: Record<RecordingStatus, string> = {
   expired: "Expired (deleted)",
   failed: "Failed",
   consent_withdrawn: "Consent withdrawn (deleted)",
+};
+
+export const MODERATION_LABEL: Record<ModerationStatus, string> = {
+  visible: "Visible",
+  hidden: "Hidden",
+  flagged: "Flagged for review",
 };
 
 export const REGISTRATION_STATUS_LABEL: Record<RegistrationStatus, string> = {
