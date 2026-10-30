@@ -1,6 +1,6 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
-import { BellRing, CalendarClock, MapPin } from "lucide-react";
+import { BellRing, CalendarClock, MapPin, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -142,9 +142,15 @@ function FindCare() {
           <RadiusInput />
           <LocationPicker />
         </div>
-        <Button className="justify-self-start" onClick={() => router.push("/patient/find")}>
-          Show clinics near me
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => router.push("/patient/concierge")}>
+            <Sparkles aria-hidden="true" />
+            Find care with AI
+          </Button>
+          <Button variant="outline" onClick={() => router.push("/patient/find")}>
+            Show clinics on a map
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
