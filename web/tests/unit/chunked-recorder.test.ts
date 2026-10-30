@@ -61,7 +61,7 @@ function setup(upload: (seq: number, blob: Blob, secs: number) => Promise<Upload
 
 describe("ChunkedRecorder", () => {
   it("sends one file when the consult is 15 minutes or less", async () => {
-    const upload = vi.fn(async () => ({ status: "stored" as const }));
+    const upload = vi.fn(async (...args: [number, Blob, number]) => (void args, { status: "stored" as const }));
     const { rec, recorders, advance } = setup(upload);
     rec.start();
     await advance(10 * 60_000);
@@ -72,7 +72,7 @@ describe("ChunkedRecorder", () => {
   });
 
   it("sends seq 1 at 15 minutes, then a file every 5 minutes", async () => {
-    const upload = vi.fn(async () => ({ status: "stored" as const }));
+    const upload = vi.fn(async (...args: [number, Blob, number]) => (void args, { status: "stored" as const }));
     const { rec, recorders, advance } = setup(upload);
     rec.start();
     await advance(27 * 60_000);
@@ -89,7 +89,8 @@ describe("ChunkedRecorder", () => {
 
   it("retries a failed chunk with the same seq, then reports failure and can retry later", async () => {
     let fail = 6; // more than the 4 retries
-    const upload = vi.fn(async () => {
+    const upload = vi.fn(async (...args: [number, Blob, number]) => {
+      void args;
       if (fail-- > 0) throw new Error("network");
       return { status: "stored" as const };
     });
@@ -113,7 +114,7 @@ describe("ChunkedRecorder", () => {
     expect(rec.phase).toBe("discarded");
     expect(rec.discardReason).toBe("consent_withdrawn");
 
-    const ok = vi.fn(async () => ({ status: "stored" as const }));
+    const ok = vi.fn(async (...args: [number, Blob, number]) => (void args, { status: "stored" as const }));
     const second = setup(ok);
     second.rec.start();
     second.rec.discard();

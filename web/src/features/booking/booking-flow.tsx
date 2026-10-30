@@ -10,7 +10,7 @@ import { EmergencyBanner } from "@/components/emergency-banner";
 import { Field } from "@/components/form-field";
 import { NativeSelect } from "@/components/native-select";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";

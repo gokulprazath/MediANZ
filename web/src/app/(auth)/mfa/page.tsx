@@ -22,12 +22,12 @@ import { totpSchema } from "@/lib/validation";
 
 function Enrolment({ onReady }: { onReady: (e: MfaEnrolment) => void }) {
   const enrol = useQuery({ queryKey: ["mfa-enrol"], queryFn: () => getAuthClient().mfaEnroll(), staleTime: Infinity, gcTime: 0 });
-  const [qr, setQr] = useState<string | null>(null);
+  const [generatedQr, setGeneratedQr] = useState<string | null>(null);
+  const qr = enrol.data?.qrSvg ?? generatedQr;
   useEffect(() => {
     if (!enrol.data) return;
     onReady(enrol.data);
-    if (enrol.data.qrSvg) setQr(enrol.data.qrSvg);
-    else void QRCode.toDataURL(enrol.data.uri, { margin: 1, width: 192 }).then(setQr);
+    if (!enrol.data.qrSvg) void QRCode.toDataURL(enrol.data.uri, { margin: 1, width: 192 }).then(setGeneratedQr);
   }, [enrol.data, onReady]);
 
   if (enrol.isPending) return <LoadingState label="Preparing your authenticator set-up…" />;
