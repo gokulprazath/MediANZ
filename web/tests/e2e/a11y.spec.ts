@@ -5,7 +5,7 @@ import { ACCOUNTS, APPT, chooseClinic, expectAccessible, login, resetMock } from
 test.beforeEach(async ({ page }) => resetMock(page));
 
 test("public pages", async ({ page }) => {
-  for (const path of ["/login", "/signup", "/reset-password", "/privacy"]) {
+  for (const path of ["/login", "/login?demo", "/signup", "/reset-password", "/privacy"]) {
     await page.goto(path);
     await expectAccessible(page);
   }
@@ -21,7 +21,6 @@ test("patient pages", async ({ page }) => {
     `/patient/appointments/${APPT(101)}/live`,
     `/patient/appointments/${APPT(2)}/feedback`,
     "/patient/assistant",
-    "/patient/concierge",
   ]) {
     await page.goto(path);
     await expectAccessible(page);

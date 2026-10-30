@@ -1,5 +1,6 @@
 // The mock database, built from supabase/seed/01_sample_data.sql,
-// 02_link_test_logins.sql and 03_sample_vitals.sql: the same ids, names and
+// 02_link_test_logins.sql, 03_sample_vitals.sql and Olivia's history from
+// 07_olivia_demo_data.sql (not its checked-in visit): the same ids, names and
 // values, with dates relative to today exactly as the SQL computes them.
 // Rows the SQL creates with gen_random_uuid() get stable generated ids here.
 import { validOn } from "@/lib/history";
@@ -666,6 +667,9 @@ export function buildSeed(now: Date = new Date()): MockState {
     [13, 13, 1, 6, 1, -60, "09:30", 30, "completed", -1, 2, 20, "Cervical screening test", "standard", 85, 43.9, 41.1, "Cervical screening collected. Results to be sent by SMS.", null, 14, "web"],
     [15, 15, 5, 2, 1, -24, "15:00", 15, "completed", -3, 5, 9, "Medication review", "standard", 85, 43.9, 41.1, "Reviewed asthma preventer technique. No changes.", null, 6, "web"],
     [14, 14, 5, 2, 1, -25, "14:00", 15, "rescheduled", null, null, null, "Medication review", "standard", null, null, null, null, null, 8, "web"],
+    // 07_olivia_demo_data.sql
+    [201, 201, 1, 1, 2, -200, "10:00", 15, "completed", -6, 3, 11, "Cough that will not go away after a cold", "standard", 95, 43.9, 51.1, "Post-viral cough for 3 weeks, chest clear, afebrile. Honey and steam; return if not settling in 3 weeks.", null, 2, "web"],
+    [202, 202, 1, 1, 1, -35, "09:15", 15, "completed", -4, 5, 13, "Tiredness and low energy for a month", "standard", 90, 43.9, 46.1, "Four weeks of fatigue, heavier periods, occasional postural dizziness. Ordered FBC, iron studies, TSH, B12 and folate (fasting). Review in 2 weeks.", null, 4, "mobile"],
   ];
   for (const [id, slot, p, c, f, dayOff, startTime, mins, status, late, wait, consult, reason, visitType, fee, rebate, gap, notes, cancelReason, bookedBefore, channel] of past) {
     const tz = facilityTz(state, FAC(f));
@@ -790,6 +794,7 @@ export function buildSeed(now: Date = new Date()): MockState {
     [6, 3, 2, 5, "Ankle review", "mobile"],
     [8, 5, 4, 2, "Blood pressure check", "web"],
     [7, 2, 1, 6, "Ear check after antibiotics", "mobile"],
+    [1, 1, 1, 14, "Repeat iron studies review", "mobile"], // 07_olivia_demo_data.sql
   ];
   let upcomingNo = 100;
   for (const [p, c, f, daysAhead, reason, channel] of future) {
@@ -916,6 +921,23 @@ export function buildSeed(now: Date = new Date()): MockState {
     });
   }
 
+  // 07_olivia_demo_data.sql: both consented (v2, covers AI analysis) on the fatigue visit.
+  for (const [party, minsBefore] of [["patient", 2], ["clinician", 1]] as const) {
+    const a = appt(202);
+    consent({
+      appointment_id: a.id,
+      party,
+      patient_id: party === "patient" ? a.patient_id : null,
+      clinician_id: party === "clinician" ? a.clinician_id : null,
+      consent_given: true,
+      consent_text_version: "v2",
+      method: "in_app",
+      given_at: ts(plusMin(new Date(a.consult_started_at!), -minsBefore)),
+      withdrawn_at: null,
+      withdrawal_reason: null,
+    });
+  }
+
   const sessions: [number, number, RecordingStatus, number | null, string | null][] = [
     [1, 2, "approved", 780, null],
     [2, 10, "rejected", 600, null],
@@ -923,6 +945,7 @@ export function buildSeed(now: Date = new Date()): MockState {
     [4, 12, "awaiting_review", 960, null],
     [5, 13, "expired", 1140, null],
     [6, 6, "consent_withdrawn", null, null],
+    [201, 202, "approved", 690, null],
   ];
   for (const [id, n, status, secs, err] of sessions) {
     const a = appt(n);
@@ -990,6 +1013,39 @@ export function buildSeed(now: Date = new Date()): MockState {
     updated_at: nowIso,
   });
 
+  // 07_olivia_demo_data.sql: approved transcript of the fatigue visit.
+  const a202 = appt(202);
+  const a202end = new Date(a202.consult_ended_at!);
+  const fatigue: [TranscriptSegment["speaker"], number, number, string][] = [
+    ["clinician", 0, 4, "Hi Olivia, what brings you in today?"],
+    ["patient", 4, 12, "I have been really tired for about a month. I sleep eight hours and still wake up exhausted."],
+    ["clinician", 12, 17, "Any other changes, like your weight, your mood or your periods?"],
+    ["patient", 17, 25, "My periods have been heavier for the last few months. My mood is fine and my weight is about the same."],
+    ["clinician", 25, 30, "Do you get short of breath, or dizzy when you stand up?"],
+    ["patient", 30, 37, "A bit dizzy sometimes when I stand up quickly, but no chest pain and no trouble breathing."],
+    ["clinician", 37, 48, "Heavier periods can lower your iron, so I would like to check a full blood count, iron studies, thyroid, B12 and folate."],
+    ["clinician", 48, 60, "It is a fasting test, so go in the morning before breakfast, and book a follow-up in about two weeks so we can go through the results together."],
+    ["patient", 60, 63, "Should I start an iron tablet now?"],
+    ["clinician", 63, 69, "Let us wait for the results so we treat the right thing. Do you smoke at all?"],
+    ["patient", 69, 71, "No, I have never smoked."],
+  ];
+  state.consult_transcripts.push({
+    id: TRANS(201),
+    recording_session_id: SESS(201),
+    appointment_id: a202.id,
+    transcript_text: fatigue.map(([who, , , text]) => `${who === "clinician" ? "Dr Rao" : "Olivia"}: ${text}`).join(" "),
+    segments: fatigue.map(([speaker, start_sec, end_sec, text]) => ({ speaker, start_sec, end_sec, text })),
+    summary_text:
+      "Four weeks of fatigue with heavier periods and occasional dizziness on standing; no chest pain or breathlessness. " +
+      "Fasting bloods ordered: full blood count, iron studies, thyroid, B12, folate. Review results in two weeks. Never smoked.",
+    language: "en-AU",
+    status: "approved",
+    review_expires_at: ts(new Date(a202end.getTime() + 7 * 86_400_000)),
+    approved_at: ts(plusMin(a202end, 300)),
+    created_at: ts(plusMin(a202end, 2)),
+    updated_at: nowIso,
+  });
+
   // 11. Ratings
   const ratings: [number, number, number, number, boolean, string, boolean, ModerationStatus, number][] = [
     [2, 5, 5, 5, true, "Dr Rao listened carefully and explained my blood test results in plain language.", false, "visible", 5],
@@ -998,6 +1054,8 @@ export function buildSeed(now: Date = new Date()): MockState {
     [8, 1, 1, 3, false, "Rude doctor, complete waste of money, avoid at all costs!!!", false, "hidden", 2],
     [11, 5, 5, 5, true, "On time, very professional, and sorted my prescription in a few minutes.", false, "visible", 8],
     [15, 4, 5, 4, true, "Quick appointment and clear instructions on using my asthma inhaler properly.", false, "visible", 26],
+    [201, 5, 5, 5, true, "Seen on time and reassured that my cough would settle. It did.", false, "visible", 6],
+    [202, 5, 5, 4, true, "Dr Rao took my tiredness seriously and explained every blood test she ordered.", false, "visible", 3],
   ];
   for (const [n, rating, comm, wait, rec, comment, anon, moderation, hours] of ratings) {
     const a = appt(n);
@@ -1059,6 +1117,8 @@ export function buildSeed(now: Date = new Date()): MockState {
     [11, 36.6, 96, 148, 92, 172.0, 88.9, "First reading", 2],
     [12, 36.7, 99, 122, 76, 186.0, 82.0, null, 3],
     [15, 36.5, 95, 118, 77, 164.0, 70.4, "Asthmatic, SpO2 at usual baseline", 4],
+    [201, 36.9, 98, 114, 72, 167.0, 64.8, "Dry cough, chest clear", 3], // 07_olivia_demo_data.sql
+    [202, 36.6, 98, 108, 68, 167.0, 63.1, "Lying 112/70, standing 104/66", 4],
   ];
   const addVitals = (n: number, v: Partial<VisitVitals>, mins: number) => {
     const a = appt(n);
@@ -1111,6 +1171,21 @@ export function buildSeed(now: Date = new Date()): MockState {
     answered_at: null,
     created_by_agent: "insights-writer",
     created_at: ts(new Date(now.getTime() - 26 * 3_600_000)),
+    updated_at: nowIso,
+  });
+  // 07_olivia_demo_data.sql: an answered question after the same visit.
+  state.agent.gp_queries.push({
+    id: "84000000-0000-4000-8000-000000000201",
+    appointment_id: a2.id,
+    question: "Is it normal for the iron tablets to make my stools very dark?",
+    context_fact_ids: [],
+    status: "answered",
+    answer:
+      "Yes. Dark or black stools are a common and harmless effect of iron tablets. If you notice red blood, bad stomach pain or vomiting, call the clinic or get care straight away. Dr Rao",
+    answered_by: state.clinicians.find((c) => c.id === CLIN(1))!.auth_user_id,
+    answered_at: ts(new Date(a2end.getTime() + 2 * 86_400_000)),
+    created_by_agent: "insights-writer",
+    created_at: ts(new Date(a2end.getTime() + 86_400_000)),
     updated_at: nowIso,
   });
   const plan = state.insurance_plans[0];

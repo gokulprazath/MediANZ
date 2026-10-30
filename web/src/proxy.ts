@@ -1,17 +1,20 @@
 // Route protection (Next.js 16 "proxy", formerly middleware):
 //   - every page except the public ones needs a signed-in user
 //   - /staff needs app_metadata.role staff or admin
-//   - /clinician and /staff need MFA (aal2) and end after 30 minutes idle
+//   - /clinician and /staff need MFA (aal2) and end after 30 minutes idle;
+//     a live demo-login session of a demo account skips the MFA step only
 // Screens check the user's role again from their own data; this is the first gate.
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { IDLE_COOKIE, IDLE_LIMIT_MS, isPublicPath, needsAal2 } from "@/lib/auth/constants";
+import { DEMO_COOKIE, isDemoSession } from "@/lib/auth/demo";
 import { IS_MOCK, SUPABASE_ANON_KEY, SUPABASE_URL } from "@/lib/env";
 import { decodeMockSession, MOCK_SESSION_COOKIE } from "@/lib/mock/session";
 
 interface SessionInfo {
   role: string | null;
   aal: string | null;
+  email?: string | null;
 }
 
 export async function proxy(request: NextRequest) {
@@ -39,8 +42,8 @@ export async function proxy(request: NextRequest) {
     });
     // Verifies the JWT and refreshes the session cookies when needed.
     const { data } = await supabase.auth.getClaims();
-    const claims = data?.claims as { app_metadata?: { role?: string }; aal?: string } | undefined;
-    session = claims ? { role: claims.app_metadata?.role ?? null, aal: claims.aal ?? null } : null;
+    const claims = data?.claims as { app_metadata?: { role?: string }; aal?: string; email?: string } | undefined;
+    session = claims ? { role: claims.app_metadata?.role ?? null, aal: claims.aal ?? null, email: claims.email ?? null } : null;
     signOut = async () => {
       await supabase.auth.signOut({ scope: "local" });
     };
@@ -69,7 +72,8 @@ export async function proxy(request: NextRequest) {
       res.cookies.delete(IDLE_COOKIE);
       return res;
     }
-    if (session.aal !== "aal2") return redirect(`/mfa?next=${next}`);
+    const demo = isDemoSession(session.email, request.cookies.get(DEMO_COOKIE)?.value);
+    if (session.aal !== "aal2" && !demo) return redirect(`/mfa?next=${next}`);
     response.cookies.set(IDLE_COOKIE, String(Date.now()), { sameSite: "lax", path: "/" });
   }
   return response;

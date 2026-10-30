@@ -529,6 +529,39 @@ async def test_slm_answers_explain_and_option_questions() -> None:
     assert "text" in schema["properties"]["management_plan_summary"]["properties"]
     payload = json.loads(fake.requests[0]["messages"][1]["content"])
     assert payload["transcript"] == STATE
+    assert fake.requests[0]["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+async def test_slm_thinking_can_be_left_on() -> None:
+    settings = make_settings(
+        slm_base_url="https://slm.test/v1",
+        slm_api_key="k",
+        slm_model="m",
+        slm_disable_thinking=False,
+    )
+    engine = SlmDecisionEngine(_entry("slm"), settings)
+    fake = FakeChat({"diet_type": {"answer": "unclear", "probability": 0.9}})
+    engine._client = fake
+    await engine.decide([DIET], STATE)
+    assert fake.requests[0]["extra_body"] is None
+    assert OpenAICompatibleEngine(_entry("slm"), settings)._extra_body is None
+
+
+def test_slm_timeout_is_configurable() -> None:
+    settings = make_settings(slm_base_url="https://slm.test/v1", slm_api_key="k", slm_model="m")
+    assert OpenAICompatibleEngine(_entry("slm"), settings)._client.timeout == 60.0
+    slow = make_settings(
+        slm_base_url="https://slm.test/v1", slm_api_key="k", slm_model="m", slm_timeout_seconds=90
+    )
+    assert OpenAICompatibleEngine(_entry("slm"), slow)._client.timeout == 90.0
+
+
+def test_agent_sends_the_slm_extra_body_only_when_it_uses_the_slm() -> None:
+    thinking_off = {"chat_template_kwargs": {"enable_thinking": False}}
+    assert make_settings().slm_extra_body == thinking_off
+    assert make_settings().agent_extra_body == thinking_off
+    assert make_settings(agent_llm_model="other-model").agent_extra_body is None
+    assert make_settings(slm_disable_thinking=False).agent_extra_body is None
 
 
 async def test_slm_explain_without_text_is_rejected() -> None:

@@ -57,6 +57,7 @@ class Observation(_Out):
     value: Any
     unit: str | None = None
     observed_at: datetime
+    observed_local_date: date | None = None  # the clinic's local date of the visit
     source: Literal["measured", "transcript"]
     appointment_id: UUID
     fact_id: UUID | None = None

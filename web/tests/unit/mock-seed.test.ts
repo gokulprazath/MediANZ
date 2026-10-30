@@ -65,7 +65,7 @@ describe("mock seed", () => {
 
   it("books the upcoming appointments like _book_slot, confirms and cancels like the seed", () => {
     const upcoming = s.appointments.filter((a) => a.scheduled_start > NOW.toISOString());
-    expect(upcoming).toHaveLength(8);
+    expect(upcoming).toHaveLength(9); // seed 01's eight + seed 07's iron studies review
     const lukas = upcoming.find((a) => a.patient_id === PAT(6))!;
     expect(lukas.status).toBe("cancelled");
     expect(upcoming.some((a) => a.status === "confirmed")).toBe(true);
@@ -76,13 +76,13 @@ describe("mock seed", () => {
   });
 
   it("has consents, sessions, transcripts, ratings, claims and vitals", () => {
-    expect(s.recording_consents).toHaveLength(11);
-    expect(s.recording_sessions).toHaveLength(6);
-    expect(s.consult_transcripts.map((t) => t.status)).toEqual(["approved", "pending_patient_review"]);
-    expect(s.clinician_ratings).toHaveLength(6);
+    expect(s.recording_consents).toHaveLength(13); // + seed 07's fatigue visit (v2)
+    expect(s.recording_sessions).toHaveLength(7);
+    expect(s.consult_transcripts.map((t) => t.status)).toEqual(["approved", "pending_patient_review", "approved"]);
+    expect(s.clinician_ratings).toHaveLength(8);
     expect(s.clinician_ratings.find((r) => r.appointment_id === APPT(8))!.moderation_status).toBe("hidden");
     expect(s.insurance_claims.map((c) => c.status)).toEqual(["paid", "submitted", "rejected", "draft"]);
-    expect(s.visit_vitals).toHaveLength(13);
+    expect(s.visit_vitals).toHaveLength(15);
     expect(s.visit_vitals.find((v) => v.appointment_id === APPT(1))!.bmi).toBe(23);
   });
 

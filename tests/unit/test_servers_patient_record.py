@@ -45,6 +45,8 @@ async def test_observations_keep_sources_apart() -> None:
         bp = await call(s, "get_observations", kind="blood_pressure")
     sources = sorted(o["source"] for o in bp["observations"])
     assert sources == ["measured", "transcript"]
+    # The clinic's local date, so agents never quote the UTC day.
+    assert {o["observed_local_date"] for o in bp["observations"]} == {"2026-10-20"}
 
 
 async def test_eligibility_has_no_card_numbers() -> None:

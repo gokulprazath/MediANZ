@@ -17,7 +17,7 @@ import type { DataApi } from "@/lib/data/api";
 import { useApi } from "@/lib/data/context";
 import { friendlyError } from "@/lib/errors";
 import { useLiveQuery } from "@/lib/hooks/use-live-query";
-import { formatCountdown } from "@/lib/time";
+import { formatCountdown, formatDateTime } from "@/lib/time";
 import type { AppointmentWithRefs, ConsentParty, RecordingConsent, RecordingSession } from "@/types/db";
 import { ChunkedRecorder, pickAudioMimeType, type RecorderLike } from "./chunked-recorder";
 
@@ -200,16 +200,27 @@ function RecordingIndicator({ since }: { since: number }) {
   );
 }
 
-function ConsentRow({ label, consent }: { label: string; consent: RecordingConsent | null }) {
+const METHOD_TEXT: Record<RecordingConsent["method"], string> = {
+  in_app: "in the app",
+  verbal_recorded: "verbally (recorded by staff)",
+  written: "in writing",
+};
+
+function ConsentRow({ label, consent, timeZone }: { label: string; consent: RecordingConsent | null; timeZone: string }) {
   return (
-    <li className="flex items-center gap-2">
+    <li className="flex items-start gap-2">
       {consent ? (
-        <CheckCircle2 className="size-4 text-success" aria-hidden="true" />
+        <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
       ) : (
-        <Circle className="size-4 text-muted-foreground" aria-hidden="true" />
+        <Circle className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       )}
       <span>
         {label}: <strong>{consent ? "agreed" : "not yet agreed"}</strong>
+        {consent ? (
+          <span className="block text-xs text-muted-foreground">
+            {formatDateTime(consent.given_at, timeZone)}, {METHOD_TEXT[consent.method]}, consent wording {consent.consent_text_version}
+          </span>
+        ) : null}
       </span>
     </li>
   );
@@ -321,8 +332,12 @@ export function ConsultPanel({
           </Alert>
         ) : (
           <ul className="grid gap-1 text-sm" aria-live="polite">
-            <ConsentRow label="You" consent={mine} />
-            <ConsentRow label={party === "patient" ? "Your clinician" : "The patient"} consent={theirs} />
+            <ConsentRow label="You" consent={mine} timeZone={appointment.facility.timezone} />
+            <ConsentRow
+              label={party === "patient" ? "Your clinician" : "The patient"}
+              consent={theirs}
+              timeZone={appointment.facility.timezone}
+            />
           </ul>
         )}
 

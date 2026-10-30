@@ -221,6 +221,15 @@ export function createMockApi(state: MockState, uid: Uuid | null, options: MockA
     }
   };
 
+  // confirm/decline_booking_proposal: the owning patient only, while pending and unexpired.
+  const pendingProposal = (id: Uuid) => {
+    const p = state.agent.booking_proposals.find((x) => x.id === id);
+    if (!p || p.patient_id !== ctx().patientId) return fail("Proposal not found", "42501");
+    if (p.status !== "pending") fail("Proposal is no longer pending");
+    if (p.expires_at <= nowIso()) fail("Proposal has expired");
+    return p;
+  };
+
   // public._book_slot
   const bookSlotFor = (
     slotId: Uuid,
@@ -773,6 +782,15 @@ export function createMockApi(state: MockState, uid: Uuid | null, options: MockA
         isStaff() || a.clinician_id === c.clinicianId || (a.patient_id === c.patientId && a.scheduled_start > nowIso());
       if (!allowed) fail("Not allowed to cancel this appointment", "42501");
       setStatus(a, "cancelled", { cancellation_reason: reason, cancelled_by: uid });
+    },
+    async confirmBookingProposal(id) {
+      const p = pendingProposal(id);
+      const appointmentId = bookSlotFor(p.slot_id, p.patient_id, "web", p.reason, null);
+      Object.assign(p, { status: "confirmed", result_appointment_id: appointmentId });
+      return appointmentId;
+    },
+    async declineBookingProposal(id) {
+      pendingProposal(id).status = "declined";
     },
     async rescheduleAppointment(id, newSlotId) {
       const c = ctx();

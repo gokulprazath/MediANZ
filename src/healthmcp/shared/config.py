@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     slm_base_url: str = ""
     slm_api_key: SecretStr | None = None
     slm_model: str = ""
+    # Nemotron-style hybrid models reason before answering unless told not to; on a
+    # 20-segment extraction that was ~6k reasoning tokens (~30s) against ~100 tokens (~2s).
+    # Set false for an endpoint that rejects `chat_template_kwargs`.
+    slm_disable_thinking: bool = True
+    # Per call. Serverless models can queue for a while under load (seen: 45-85 s).
+    slm_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     tavily_api_key: SecretStr | None = None
     google_places_api_key: SecretStr | None = None
 
@@ -51,6 +57,8 @@ class Settings(BaseSettings):
     agent_max_steps: int = Field(default=8, ge=1, le=20)
     agent_action_ttl_seconds: int = Field(default=300, ge=30, le=900)
     agent_port: int = Field(default=3108, ge=1, le=65535)
+    # The patient agents' "today" and the zone they give dates in (the sample clinics are in QLD).
+    agent_time_zone: str = "Australia/Brisbane"
 
     # Consult-notes worker (SLM facts + decision-engine key points from approved transcripts)
     consult_notes_window_segments: int = Field(default=20, ge=1, le=200)
@@ -85,6 +93,18 @@ class Settings(BaseSettings):
             for d in self.allowed_research_domains.split(",")
             if d.strip()
         )
+
+    @property
+    def slm_extra_body(self) -> dict[str, Any] | None:
+        """Extra request body for every SLM call (None sends nothing extra)."""
+        if not self.slm_disable_thinking:
+            return None
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+
+    @property
+    def agent_extra_body(self) -> dict[str, Any] | None:
+        """The SLM's extra body, only while the agent falls back to the SLM's model."""
+        return None if self.agent_llm_model else self.slm_extra_body
 
     @property
     def agent_model(self) -> str:

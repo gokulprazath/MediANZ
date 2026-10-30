@@ -194,3 +194,23 @@ export function formatCountdown(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000));
   return `${Math.floor(total / 60)}:${pad(total % 60)}`;
 }
+
+/**
+ * The hours a day/week calendar shows: the usual clinic day, widened to fit
+ * any appointment outside it (an evening visit is never hidden).
+ */
+export function visibleHours(
+  events: { start: string; end: string }[],
+  timeZone: string,
+  usual: [number, number] = [7, 20],
+): { slotMinTime: string; slotMaxTime: string } {
+  let [lo, hi] = usual;
+  for (const e of events) {
+    const start = wallClock(new Date(e.start), timeZone);
+    const end = wallClock(new Date(e.end), timeZone);
+    lo = Math.min(lo, start.hour);
+    const sameDay = localDate(e.start, timeZone) === localDate(e.end, timeZone);
+    hi = Math.max(hi, !sameDay ? 24 : end.minute > 0 ? end.hour + 1 : end.hour);
+  }
+  return { slotMinTime: `${pad(lo)}:00:00`, slotMaxTime: `${pad(Math.min(hi, 24))}:00:00` };
+}

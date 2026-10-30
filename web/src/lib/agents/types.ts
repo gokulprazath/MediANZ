@@ -2,10 +2,16 @@
 // (agent.py: /chat, /chat/confirm) and the discovery API (discovery/models.py).
 // Pydantic sends Decimal as a string, so money arrives as "85.00".
 export type Money = string | null;
-export type AgentRole = "explainer" | "extractor" | "insights" | "insurance" | "insights-writer";
+export type AgentRole = "explainer" | "extractor" | "insights" | "insurance" | "insights-writer" | "booking";
 
+/** An earlier turn of the conversation (agent.py ChatTurn); kept in the page's memory only. */
+export interface ChatTurn {
+  role: "patient" | "assistant";
+  text: string;
+}
 export interface ChatRequest {
   message: string;
+  history?: ChatTurn[];
   reason_facts?: string[];
   context_fact_ids?: string[];
 }
@@ -14,6 +20,14 @@ export interface ChatResponse {
   answer: string;
   pending_action: string | null; // signed GP-question draft; only the patient can confirm it
   appointment_id: string | null;
+  // A booking_proposals row from the booking agent: nothing is booked until the
+  // patient confirms it (confirm_booking_proposal, called by the app, not the agent).
+  booking_proposal?: BookingProposalCard | null;
+}
+export interface BookingProposalCard {
+  proposal_id: string;
+  summary: string;
+  expires_at: string;
 }
 export interface ConfirmResponse {
   status: "created";

@@ -46,6 +46,19 @@ export interface AgentLayerState {
   decision_log: DecisionLogRow[];
   research_drafts: ResearchDraftSummary[];
   discovery_bookings: Record<string, Uuid>; // idempotency key -> appointment id
+  booking_proposals: MockBookingProposal[];
+}
+
+// public.booking_proposals (kind 'book' only: the assistant proposes new bookings).
+export interface MockBookingProposal {
+  id: Uuid;
+  patient_id: Uuid;
+  slot_id: Uuid;
+  reason: string | null;
+  status: "pending" | "confirmed" | "declined" | "expired";
+  expires_at: string;
+  created_by_agent: string;
+  result_appointment_id: Uuid | null;
 }
 
 const YES_NO = [{ value: "yes" }, { value: "no" }, { value: "not_stated" }];
@@ -160,6 +173,7 @@ export function emptyAgentLayer(): AgentLayerState {
     decision_log: [],
     research_drafts: [],
     discovery_bookings: {},
+    booking_proposals: [],
   };
 }
 

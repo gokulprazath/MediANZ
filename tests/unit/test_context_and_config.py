@@ -55,6 +55,7 @@ def test_allowlist_matches_spec(allowlist: AgentAllowlist) -> None:
         "insights",
         "insurance",
         "insights-writer",
+        "booking",
     }
     expected = {
         "patient-assistant": {"patient_record", "matching", "booking"},
@@ -86,6 +87,11 @@ def test_allowlist_matches_spec(allowlist: AgentAllowlist) -> None:
             "web_research": {"web_search", "web_extract"},
         },
         "insights-writer": {"extraction": {"create_gp_query"}},
+        # Proposes only: confirm_booking_proposal stays app-only (never an agent tool).
+        "booking": {
+            "matching": {"find_gp_candidates"},
+            "booking": {"get_available_slots", "propose_booking"},
+        },
     }
     for agent, servers in least_privilege.items():
         assert {

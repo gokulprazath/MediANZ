@@ -18,6 +18,20 @@ test("staff sign in with an MFA code", async ({ page }) => {
   await expect(page.getByRole("combobox", { name: "Clinic" }).first()).toBeVisible();
 });
 
+for (const [role, home, check] of [
+  ["Patient", /\/patient$/, "My appointments"],
+  ["Clinician", /\/clinician$/, "Review queue"],
+  ["Receptionist", /\/staff$/, "AI operations"],
+] as const) {
+  test(`evaluators sign in with the ${role.toLowerCase()} demo account`, async ({ page }) => {
+    await page.goto("/login?demo");
+    await expect(page.getByRole("tab", { name: "Demo account" })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("button", { name: `Continue as ${role}` }).click();
+    await page.waitForURL(home);
+    await expect(page.getByRole("link", { name: new RegExp(check) }).first()).toBeVisible();
+  });
+}
+
 test("a wrong password is refused", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Email").first().fill(ACCOUNTS.olivia);

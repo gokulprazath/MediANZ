@@ -226,6 +226,7 @@ class SlmDecisionEngine:
         self._client = slm_client(settings)
         self.info = _info(entry).model_copy(update={"model": settings.slm_model})
         self._model = settings.slm_model
+        self._extra_body = settings.slm_extra_body
 
     async def decide(self, questions: Sequence[TypedQuestion], state: str) -> list[TypedAnswer]:
         if len({q.id for q in questions}) != len(questions):
@@ -244,6 +245,7 @@ class SlmDecisionEngine:
                     "type": "json_schema",
                     "json_schema": {"name": "answers", "schema": _slm_schema(questions)},
                 },
+                extra_body=self._extra_body,
             )
             return slm_answers(questions, json.loads(response.choices[0].message.content or "null"))
 

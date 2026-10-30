@@ -84,6 +84,24 @@ One line per assumption. Spec: `docs/FRONTEND_SPEC_A_NOW.md`.
 ## Privacy page
 - `/privacy` is a server page with the v1 consent wording from `config/consent.ts`, plus how health data, location and rating comments are handled and a "no medical advice" note with 000 and Lifeline.
 
+## Find care and assistant booking
+- The AI care finder and the clinic map are one page, "Find care" (`/patient/find`): describe the problem, then AI matches (ranked cards, numbered and highlighted pins, map zooms to them) or all clinics (the directory list) in tabs. `/patient/concierge` redirects; nav has one "Find care" item; home's "Find care with AI" opens `/patient/find?ai=1`, which searches once the location and reason are set.
+- Map pins: the accessible name (`title`) starts with the visible label (WCAG 2.5.3); the map follows the system light/dark scheme (`colorScheme="FOLLOW_SYSTEM"`). The map id stays `NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID`, else `DEMO_MAP_ID`.
+- The assistant books through a new least-privilege `booking` agent (`find_gp_candidates`, `get_available_slots`, `propose_booking`). `/chat` returns `booking_proposal` (id, summary, expiry); the chat shows a card and only the patient's Confirm calls `confirm_booking_proposal` (Decline calls `decline_booking_proposal`). One proposal per message. Mock mode mirrors it (soonest GP time in 14 days).
+
+## Demo login for evaluators
+- Login has a third tab, "Demo account" (`/login?demo` opens it): Patient (Olivia Brown), Clinician (Dr Asha Rao) and Receptionist (Southbank front desk), one clinic so the three roles meet. Each lands on its portal home with that role's full access.
+- Live mode: `POST /api/demo-login` signs in on the server with the demo password (anon key; RLS applies; never the service role) and sets an HttpOnly `mz_demo` cookie (12 h). The proxy skips the MFA (aal2) step for `/clinician` and `/staff` only when that cookie names the demo role of the signed-in demo account and `DEMO_LOGIN_ENABLED=true`; password and email-link sign-ins of the same accounts still need MFA, and the 30-minute idle sign-out still applies. RLS does not check aal, so access is otherwise unchanged. Shown only with `NEXT_PUBLIC_DEMO_LOGIN=true`. Mock mode: the same tab uses the mock password and code.
+- Shared sample data, no reset: evaluators see each other's changes (the hosted database is never reset).
+
+## Recording consent v2 and Olivia's demo data
+- The consent panel now shows and records wording `v2` (covers AI analysis, "AI help with the notes"). With `v1`, `get_processing_eligibility` returned `*_consent_version_excludes_ai`, so transcripts recorded in the app were never drafted by the consult-notes worker. Earlier `v1` consents stay valid for recording.
+- `supabase/seed/07_olivia_demo_data.sql` (re-runnable): two more past visits with Dr Rao (one at Paddington, where she worked until 90 days ago), vitals, ratings, an approved transcript of the fatigue visit (queued for the worker), an answered GP question, a review in two weeks, and a visit checked in now with Olivia's consent, so recording works at any hour. Booked visits not checked in become no-shows 30 minutes after their start (pg_cron), which is why the seed checks this one in. The web mock mirrors the history (ids 201/202), not the checked-in visit.
+
+## Assistant conversation
+- The conversation lives in `ConversationProvider` in the patient layout (memory only, never browser storage): it survives moving between patient pages, a reply arriving after the patient left still lands, and it ends on sign-out or when another patient signs in. Each message sends the last 12 turns (2000 characters each, under the proxy's 32 KB limit) so follow-ups make sense.
+- A drafted GP question shows who it goes to ("To Dr Asha Rao, about your visit on ..."); booking and question outcomes are kept on the turn, so returning to the page never re-offers a confirmed booking.
+
 ## Tests
 - Unit tests (`tests/unit`, Vitest, jsdom, TZ Australia/Brisbane) use the mock store directly with a fixed "now" (Friday 30 Oct 2026, 11 am Brisbane).
 - E2E (`tests/e2e`, Playwright, Chromium only) run one at a time against `next dev` on port 3100 in mock mode; each test resets the mock database. `PW_CHROMIUM_PATH` lets the suite use a preinstalled Chromium when it differs from Playwright's pinned build.

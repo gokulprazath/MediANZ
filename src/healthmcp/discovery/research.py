@@ -77,6 +77,7 @@ class OpenAIResearchExtractor:
         if not (settings.agent_base_url and settings.agent_api_key and settings.agent_model):
             raise ResearchUnavailable("Research model is not configured")
         self._model = settings.agent_model
+        self._extra_body = settings.agent_extra_body
         self._client = client or AsyncOpenAI(
             base_url=settings.agent_base_url,
             api_key=settings.agent_api_key.get_secret_value(),
@@ -107,6 +108,7 @@ class OpenAIResearchExtractor:
                     "type": "json_schema",
                     "json_schema": {"name": name, "strict": True, "schema": schema},
                 },
+                extra_body=self._extra_body,
             )
             raw = response.choices[0].message.content
         except Exception as exc:

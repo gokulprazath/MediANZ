@@ -3,11 +3,15 @@
 // agent service routes each message to one agent (records, insurance, fees),
 // which may only use its own read-only tools with the patient's token. It can
 // draft a question for the clinician, but nothing is sent until the patient
-// approves it (/chat/confirm). The conversation lives in this page's memory
-// only and is never stored in the browser.
+// approves it (/chat/confirm). The booking agent proposes a time; only the
+// patient's Confirm books it (confirm_booking_proposal). The conversation is
+// kept in memory above the patient pages (features/assistant/conversation): it
+// survives moving between pages, ends on sign-out and is never stored in the
+// browser. Each message sends the recent turns so follow-ups make sense.
 import { useQueryClient } from "@tanstack/react-query";
-import { Bot, MessageSquareText, Send, Sparkles, Trash2, User } from "lucide-react";
+import { Bot, CalendarCheck, MessageSquareText, Send, Sparkles, Trash2, User } from "lucide-react";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmergencyBanner } from "@/components/emergency-banner";
@@ -20,20 +24,114 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { containsEmergencyWords } from "@/config/emergency";
 import { AGENT_LABEL, SUGGESTIONS } from "@/features/assistant/agents";
+import { type BookingOutcome, useConversation } from "@/features/assistant/conversation";
 import { agentErrorMessage, agents } from "@/lib/agents/client";
 import { readPendingAction } from "@/lib/agents/pending-action";
-import type { AgentRole } from "@/lib/agents/types";
+import type { BookingProposalCard } from "@/lib/agents/types";
 import { useApi } from "@/lib/data/context";
 import { clinicianName } from "@/lib/format";
 import { useLiveQuery } from "@/lib/hooks/use-live-query";
 import { useMe } from "@/lib/hooks/use-me";
-import { formatDate, formatDateTime } from "@/lib/time";
+import { formatCountdown, formatDate, formatDateTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
-type Turn =
-  | { id: number; from: "patient"; text: string }
-  | { id: number; from: "agent"; agent: AgentRole; text: string; pending: { action: string; appointmentId: string | null } | null; decided?: "sent" | "declined" }
-  | { id: number; from: "error"; text: string };
+function BookingProposal({
+  proposal,
+  outcome,
+  onOutcome,
+}: {
+  proposal: BookingProposalCard;
+  outcome: BookingOutcome | undefined;
+  onOutcome: (o: BookingOutcome) => void;
+}) {
+  const api = useApi();
+  const qc = useQueryClient();
+  const [now, setNow] = useState(() => Date.now());
+  const [busy, setBusy] = useState(false);
+  const done = outcome?.status === "booked" ? { booked: outcome.appointmentId } : outcome?.status === "declined" ? "declined" : null;
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const remaining = Date.parse(proposal.expires_at) - now;
+  const decide = async (confirm: boolean) => {
+    setBusy(true);
+    try {
+      if (confirm) {
+        const appointmentId = await api.confirmBookingProposal(proposal.proposal_id);
+        await qc.invalidateQueries({ queryKey: ["appointments"] });
+        toast.success("Booked");
+        onOutcome({ status: "booked", appointmentId });
+      } else {
+        await api.declineBookingProposal(proposal.proposal_id);
+        onOutcome({ status: "declined" });
+      }
+    } catch (err) {
+      toast.error(err instanceof Error && /no longer|expired|not available/i.test(err.message)
+        ? "That time is no longer available. Ask the assistant for another."
+        : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="grid gap-2 rounded-md border bg-background p-3">
+      <p className="flex items-center gap-2 font-medium">
+        <CalendarCheck className="size-4" aria-hidden="true" />
+        Book this appointment?
+      </p>
+      <p>{proposal.summary}</p>
+      {done && done !== "declined" ? (
+        <p role="status" className="text-success">
+          Booked.{" "}
+          <Link href={`/patient/appointments/${done.booked}/confirmed`} className="underline">
+            See your booking
+          </Link>
+        </p>
+      ) : done === "declined" ? (
+        <p role="status" className="text-muted-foreground">
+          Not booked.
+        </p>
+      ) : remaining <= 0 ? (
+        <p role="status" className="text-muted-foreground">
+          This offer has expired. Ask again for a new time.
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => void decide(true)} disabled={busy}>
+              {busy ? "Booking…" : "Confirm booking"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => void decide(false)} disabled={busy}>
+              Not this one
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground" role="timer" aria-live="off">
+            Nothing is booked until you confirm. This offer lasts {formatCountdown(remaining)}. For another time or clinic, ask
+            again (for example &ldquo;book a GP on Friday afternoon&rdquo;) or use{" "}
+            <Link href="/patient/find" className="underline">
+              Find care
+            </Link>
+            .
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** "To Dr Asha Rao, about your visit on Fri 16 Oct 2026": who the drafted question goes to. */
+function QuestionRecipient({ appointmentId }: { appointmentId: string }) {
+  const api = useApi();
+  const appt = useQuery({ queryKey: ["appointment", appointmentId], queryFn: () => api.getAppointment(appointmentId) });
+  if (!appt.data) return null;
+  return (
+    <p className="text-sm">
+      To <strong>{clinicianName(appt.data.clinician)}</strong>, about your visit on{" "}
+      {formatDate(appt.data.scheduled_start, appt.data.facility.timezone)} at {appt.data.facility.name}.
+    </p>
+  );
+}
 
 function MyQuestions({ patientId }: { patientId: string }) {
   const api = useApi();
@@ -93,10 +191,8 @@ function MyQuestions({ patientId }: { patientId: string }) {
 export default function AssistantPage() {
   const me = useMe();
   const qc = useQueryClient();
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const { turns, busy, ask: send, update, clear } = useConversation();
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const nextId = useRef(1);
   const logRef = useRef<HTMLOListElement>(null);
   const patientId = me.data?.patient?.id ?? "";
 
@@ -105,28 +201,9 @@ export default function AssistantPage() {
   }, [turns.length]);
 
   const ask = async (text: string) => {
-    const message = text.trim();
-    if (!message || busy) return;
+    if (!text.trim() || busy) return;
     setDraft("");
-    setTurns((t) => [...t, { id: nextId.current++, from: "patient", text: message }]);
-    setBusy(true);
-    try {
-      const res = await agents.chat({ message });
-      setTurns((t) => [
-        ...t,
-        {
-          id: nextId.current++,
-          from: "agent",
-          agent: res.agent,
-          text: res.answer,
-          pending: res.pending_action ? { action: res.pending_action, appointmentId: res.appointment_id } : null,
-        },
-      ]);
-    } catch (err) {
-      setTurns((t) => [...t, { id: nextId.current++, from: "error", text: agentErrorMessage(err) }]);
-    } finally {
-      setBusy(false);
-    }
+    await send(text);
   };
 
   const decide = async (turnId: number, send: boolean) => {
@@ -142,7 +219,7 @@ export default function AssistantPage() {
         return;
       }
     }
-    setTurns((t) => t.map((x) => (x.id === turnId && x.from === "agent" ? { ...x, decided: send ? "sent" : "declined" } : x)));
+    update(turnId, { decided: send ? "sent" : "declined" });
   };
 
   const emergency = containsEmergencyWords(draft) || turns.some((t) => t.from === "patient" && containsEmergencyWords(t.text));
@@ -151,10 +228,10 @@ export default function AssistantPage() {
     <div className="mx-auto grid max-w-3xl gap-6">
       <PageHeader
         title="AI assistant"
-        description="A team of AI agents that answer from your approved record, your insurance plan and clinic fees. It doesn't diagnose or give medical advice."
+        description="A team of AI agents that answer from your approved record, your insurance plan and clinic fees, and can book an appointment for you to confirm. It doesn't diagnose or give medical advice."
         actions={
           turns.length ? (
-            <Button variant="outline" onClick={() => setTurns([])}>
+            <Button variant="outline" onClick={clear}>
               <Trash2 aria-hidden="true" />
               Clear conversation
             </Button>
@@ -167,9 +244,11 @@ export default function AssistantPage() {
         <AlertTitle>AI assistant, not a clinician</AlertTitle>
         <AlertDescription>
           Answers come only from facts your clinician approved. If it can&apos;t answer, it drafts a question for your clinician and
-          sends it only if you approve. This conversation isn&apos;t saved. For emergencies call 000. To find and book care, use{" "}
-          <Link href="/patient/concierge" className="underline">
-            the care concierge
+          sends it only if you approve. Ask it to book and it offers a time; nothing is booked until you confirm. This
+          conversation stays while you move around the app and is cleared when you sign out; it isn&apos;t saved. For
+          emergencies call 000. To compare clinics on a map, use{" "}
+          <Link href="/patient/find" className="underline">
+            Find care
           </Link>
           .
         </AlertDescription>
@@ -210,9 +289,13 @@ export default function AssistantPage() {
                       </span>
                     ) : null}
                     <p className="whitespace-pre-wrap">{t.text}</p>
+                    {t.from === "agent" && t.proposal ? (
+                      <BookingProposal proposal={t.proposal} outcome={t.booking} onOutcome={(booking) => update(t.id, { booking })} />
+                    ) : null}
                     {t.from === "agent" && t.pending ? (
                       <div className="grid gap-2 rounded-md border bg-background p-3">
                         <p className="font-medium">Send this question to your clinician?</p>
+                        {t.pending.appointmentId ? <QuestionRecipient appointmentId={t.pending.appointmentId} /> : null}
                         <blockquote className="border-l-2 pl-3 italic">
                           {readPendingAction(t.pending.action)?.question ?? "The question the assistant drafted"}
                         </blockquote>

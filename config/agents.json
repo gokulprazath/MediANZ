@@ -114,6 +114,14 @@
         "web_research": ["web_search", "web_extract"]
       }
     },
+    "booking": {
+      "description": "Patient-facing booking helper: finds a free slot and prepares a booking proposal the patient confirms in the app (user mode, never books).",
+      "modes": ["user"],
+      "servers": {
+        "matching": ["find_gp_candidates"],
+        "booking": ["get_available_slots", "propose_booking"]
+      }
+    },
     "insights-writer": {
       "description": "Internal code-only writer used after the patient approves a GP query (job mode).",
       "modes": ["job"],
