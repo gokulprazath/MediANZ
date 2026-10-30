@@ -1,5 +1,17 @@
 # Health booking app
 
+**Live app:** https://medianz.vercel.app
+
+For evaluators: open https://medianz.vercel.app/login?demo and choose **Patient**
+(Olivia Brown), **Clinician** (Dr Asha Rao) or **Receptionist** (Southbank front
+desk). No password or authenticator code is needed. The data is shared sample data,
+so you will see other evaluators' bookings, approvals and answers.
+
+The app runs on Vercel as one project (`vercel.json`): the Next.js app `web`, the
+internal Python service `backend` and the consult-notes daemon `consult-worker`,
+with Supabase for the database, sign-in and transcription. Deployment steps are in
+[web/README.md](web/README.md#deploying-to-vercel).
+
 ## Repository structure
 
 ```

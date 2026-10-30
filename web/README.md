@@ -136,6 +136,8 @@ Chromium is not the build Playwright pins, set `PW_CHROMIUM_PATH` to its binary.
 
 ## Deploying to Vercel
 
+Production: https://medianz.vercel.app (evaluator demo login at `/login?demo`).
+
 One Vercel project runs everything (`vercel.json` at the repo root, services mode):
 
 | Part | What it is | Reachable |
