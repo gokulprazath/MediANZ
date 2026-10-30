@@ -1,6 +1,6 @@
-# MediANZ: health booking app
+# MediANZ - Find your care, anywhere.
 
-**Live app:** https://medianz.vercel.app · **License:** [MIT](LICENSE)
+**Live app:** [MediANZ Application](https://medianz.vercel.app) · **Product demo:** [MediANZ Product Demo](https://youtu.be/zxfle3RUfr4) · **License:** [MIT](LICENSE)
 
 Patients find and book care with AI (costs after Medicare and insurance), ask an AI
 assistant about their own approved record, and record consults with consent;
