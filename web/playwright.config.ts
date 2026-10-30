@@ -2,7 +2,7 @@
 // dev server's memory and is reset before each test, so tests run one at a time.
 import { defineConfig, devices } from "@playwright/test";
 
-const PORT = Number(process.env.E2E_PORT ?? 3100);
+const PORT = Number(process.env.E2E_PORT ?? 3200);
 const baseURL = `http://localhost:${PORT}`;
 
 export default defineConfig({

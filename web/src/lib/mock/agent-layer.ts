@@ -305,7 +305,7 @@ export function runMockConsultWorker(
     updated_at: at,
   });
   const facts: ClinicalFact[] = [];
-  if (has(text, /iron/)) facts.push(fact("current_medication", { name: "Iron supplement", frequency: "Once a day" }, /iron/, 0.88));
+  if (has(text, /iron/)) facts.push(fact("current_medication", { name: "Iron supplement", frequency: "Once a day" }, /supplement|tablet/, 0.88));
   if (has(text, /tired|fatigue/)) facts.push(fact("symptom", { name: "Tiredness" }, /tired|fatigue/, 0.79));
   if (has(text, /repeat the blood test|repeat blood test/)) {
     facts.push(fact("follow_up", { action: "Repeat blood test", interval: "3 months" }, /repeat/, 0.86));

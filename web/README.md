@@ -76,7 +76,7 @@ npm run test:e2e     # Playwright in mock mode, with axe (tests/e2e)
 npm run build        # production build
 ```
 
-The e2e suite starts `next dev` on port 3100 (override with `E2E_PORT`) with
+The e2e suite starts `next dev` on port 3200 (override with `E2E_PORT`) with
 `NEXT_PUBLIC_DATA_MODE=mock`, resets the mock database before each test, runs in
 the `Australia/Brisbane` time zone and uses Chromium's fake microphone. If your
 Chromium is not the build Playwright pins, set `PW_CHROMIUM_PATH` to its binary.

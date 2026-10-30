@@ -20,6 +20,8 @@ test("patient pages", async ({ page }) => {
     "/patient/profile",
     `/patient/appointments/${APPT(101)}/live`,
     `/patient/appointments/${APPT(2)}/feedback`,
+    "/patient/assistant",
+    "/patient/concierge",
   ]) {
     await page.goto(path);
     await expectAccessible(page);
@@ -28,7 +30,7 @@ test("patient pages", async ({ page }) => {
 
 test("clinician pages", async ({ page }) => {
   await login(page, ACCOUNTS.rao, /\/clinician$/);
-  for (const path of ["/clinician", "/clinician/ratings", "/clinician/leave", `/clinician/appointments/${APPT(101)}`]) {
+  for (const path of ["/clinician", "/clinician/review", "/clinician/ratings", "/clinician/leave", `/clinician/appointments/${APPT(2)}`, `/clinician/appointments/${APPT(101)}`]) {
     await page.goto(path);
     await expectAccessible(page);
   }
@@ -46,6 +48,7 @@ test("staff pages", async ({ page }) => {
     "/staff/visits",
     `/staff/visits/${APPT(101)}`,
     "/staff/ratings",
+    "/staff/operations",
   ]) {
     await page.goto(path);
     await expectAccessible(page);

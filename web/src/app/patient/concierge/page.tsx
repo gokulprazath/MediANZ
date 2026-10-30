@@ -316,13 +316,8 @@ export default function ConciergePage() {
       ) : (
         <Card>
           <CardContent className="grid gap-4 pt-6">
-            <form
-              className="grid gap-4"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void search();
-              }}
-            >
+            {/* Not one <form>: the location picker has its own form inside. */}
+            <div className="grid gap-4">
               <Field label="What do you need help with?" hint="In your own words, e.g. “a skin check for a mole” or “repeat prescription”. Used to find the right service and saved as the booking reason.">
                 <Textarea rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
               </Field>
@@ -331,13 +326,13 @@ export default function ConciergePage() {
               </div>
               <LocationPicker />
               <div>
-                <Button type="submit" disabled={busy || !location || !reason.trim()}>
+                <Button type="button" onClick={() => void search()} disabled={busy || !location || !reason.trim()}>
                   <Sparkles aria-hidden="true" />
                   {busy ? "Finding care…" : "Find care"}
                 </Button>
                 {!location ? <p className="mt-2 text-sm text-muted-foreground">Share your location or choose a suburb first.</p> : null}
               </div>
-            </form>
+            </div>
           </CardContent>
         </Card>
       )}
