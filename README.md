@@ -48,6 +48,7 @@ Skip any you have already run.
 | 12 | `migrations/20261028000000_consult_key_points.sql` | Consult notes: processing queue (`consult_note_runs`, queued when a transcript is approved, published to Realtime), draft key points from the decision engine, review functions, deletion cascade |
 | 13 | `migrations/20261028010000_key_point_second_opinion.sql` | Key points: SLM second opinion when Jev is below 0.6, `explain` question kind (free-text answers), `edit_and_approve_key_point_text` |
 | 14 | `seed/06_nebius_engines.sql` | Development only: Nebius Token Factory as the SLM and Jev as the decision engine (both allow health data), sample explain questions |
+| 15 | `migrations/20261030000000_partb_live_agents.sql` | Web app Part B: Realtime for appointments, consents, recording sessions and GP queries; `patient_check_in`; patients read their own GP questions; staff-only `get_agent_activity` / `get_engine_activity`. Run after every earlier migration, including `20261028100000_chunked_transcription.sql`. |
 
 Files 4–6, 9 and 14 are sample data or development settings: use them only in a
 development project, never in the project that will hold real patients.
