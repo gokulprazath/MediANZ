@@ -233,8 +233,12 @@ export function ConsultPanel({
   const [busy, setBusy] = useState(false);
   const [drafted, setDrafted] = useState<string | null>(null);
 
-  const consents = useLiveQuery(["consents", id], () => api.listConsents(id));
-  const sessions = useLiveQuery(["recording-sessions", id], () => api.listRecordingSessions([id]));
+  const consents = useLiveQuery(["consents", id], () => api.listConsents(id), {
+    realtime: [{ table: "recording_consents", filter: `appointment_id=eq.${id}` }],
+  });
+  const sessions = useLiveQuery(["recording-sessions", id], () => api.listRecordingSessions([id]), {
+    realtime: [{ table: "recording_sessions", filter: `appointment_id=eq.${id}` }],
+  });
   const refresh = async () => {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["consents", id] }),

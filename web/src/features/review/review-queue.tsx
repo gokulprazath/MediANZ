@@ -60,7 +60,8 @@ export function useReviewData(clinicianId: Uuid, appointmentIds?: Uuid[]) {
       const own = <T extends { appointment_id: Uuid }>(rows: T[]) => rows.filter((r) => mine.has(r.appointment_id));
       return { keyPoints: own(keyPoints), facts: own(facts), openItems: own(openItems), gpQueries: own(gpQueries), questions, fields, appointments };
     },
-    { enabled: !!clinicianId, intervalMs: 15_000 },
+    // A finished consult-notes run or a new patient question refreshes the queue at once (live mode).
+    { enabled: !!clinicianId, intervalMs: 15_000, realtime: [{ table: "consult_note_runs" }, { table: "gp_queries" }] },
   );
 }
 

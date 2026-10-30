@@ -1,7 +1,10 @@
 "use client";
 // Appointment day (4.5): status polled every 5 s; consent and recording once
 // the patient is checked in.
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { useParams } from "next/navigation";
 import { EmptyState, PageHeader, QueryView } from "@/components/states";
 import { AppointmentStatusBadge } from "@/components/status-badge";
@@ -12,16 +15,59 @@ import { useApi } from "@/lib/data/context";
 import { clinicianName } from "@/lib/format";
 import { useLiveQuery } from "@/lib/hooks/use-live-query";
 import { useMe } from "@/lib/hooks/use-me";
-import { formatDateTime } from "@/lib/time";
+import { friendlyError } from "@/lib/errors";
+import { formatDateTime, formatTime } from "@/lib/time";
 
 const WAITING = new Set(["booked", "confirmed"]);
+const OPENS_MS = 30 * 60_000;
+const CLOSES_MS = 15 * 60_000;
+
+// patient_check_in: from 30 minutes before to 15 minutes after the start.
+function SelfCheckIn({ appointmentId, start, timeZone }: { appointmentId: string; start: string; timeZone: string }) {
+  const api = useApi();
+  const qc = useQueryClient();
+  const [now, setNow] = useState(() => Date.now());
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(t);
+  }, []);
+  const s = Date.parse(start);
+  if (now < s - OPENS_MS) {
+    return <span className="text-sm text-muted-foreground">Self check-in opens at {formatTime(new Date(s - OPENS_MS), timeZone)}.</span>;
+  }
+  if (now > s + CLOSES_MS) return <span className="text-sm text-muted-foreground">Self check-in has closed; please see reception.</span>;
+  return (
+    <span>
+      <Button
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await api.patientCheckIn(appointmentId);
+            await qc.invalidateQueries({ queryKey: ["appointment", appointmentId] });
+            toast.success("You're checked in");
+          } catch (err) {
+            toast.error(friendlyError(err));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        I&apos;ve arrived
+      </Button>
+    </span>
+  );
+}
 const IN_CLINIC = new Set(["checked_in", "in_consultation"]);
 
 export default function AppointmentDayPage() {
   const api = useApi();
   const me = useMe();
   const { id } = useParams<{ id: string }>();
-  const query = useLiveQuery(["appointment", id], () => api.getAppointment(id));
+  const query = useLiveQuery(["appointment", id], () => api.getAppointment(id), {
+    realtime: [{ table: "appointments", filter: `id=eq.${id}` }],
+  });
 
   return (
     <QueryView query={query}>
@@ -40,10 +86,13 @@ export default function AppointmentDayPage() {
             </div>
             {WAITING.has(a.status) ? (
               <Alert>
-                <AlertTitle>Please check in at reception</AlertTitle>
-                <AlertDescription>
-                  When you arrive at {a.facility.name}, {a.facility.address_line1}, {a.facility.suburb}, let reception
-                  know you&apos;re here. This page updates by itself.
+                <AlertTitle>Please check in when you arrive</AlertTitle>
+                <AlertDescription className="grid gap-3">
+                  <span>
+                    At {a.facility.name}, {a.facility.address_line1}, {a.facility.suburb}: tap &ldquo;I&apos;ve arrived&rdquo; or let
+                    reception know you&apos;re here. This page updates by itself.
+                  </span>
+                  <SelfCheckIn appointmentId={a.id} start={a.scheduled_start} timeZone={tz} />
                 </AlertDescription>
               </Alert>
             ) : null}

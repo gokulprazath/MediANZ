@@ -40,7 +40,7 @@ function MyQuestions({ patientId }: { patientId: string }) {
   const query = useLiveQuery(["gp-queries", "mine", patientId], async () => {
     const [rows, appointments] = await Promise.all([api.listGpQueries(), api.listAppointments({ patientId, ascending: false })]);
     return { rows, appointments };
-  }, { intervalMs: 15_000 });
+  }, { intervalMs: 15_000, realtime: [{ table: "gp_queries" }] });
   return (
     <Card aria-labelledby="my-questions">
       <CardHeader>

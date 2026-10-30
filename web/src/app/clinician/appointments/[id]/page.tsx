@@ -322,7 +322,9 @@ export default function ClinicianAppointmentPage() {
   const api = useApi();
   const me = useMe();
   const { id } = useParams<{ id: string }>();
-  const query = useLiveQuery(["appointment", id], () => api.getAppointment(id));
+  const query = useLiveQuery(["appointment", id], () => api.getAppointment(id), {
+    realtime: [{ table: "appointments", filter: `id=eq.${id}` }],
+  });
 
   return (
     <QueryView query={query}>

@@ -10,6 +10,7 @@ const NAV = [
   { href: "/staff/clinicians", label: "Clinicians" },
   { href: "/staff/visits", label: "Visits, fees and claims" },
   { href: "/staff/ratings", label: "Ratings" },
+  { href: "/staff/operations", label: "AI operations" },
 ];
 
 function StaffBanner() {
