@@ -4,8 +4,16 @@
 --
 -- Fictional data only. Root-canal clinics are added so the dental journey
 -- can be demonstrated end to end.
+--
+-- Run once. Runs as one transaction: if anything fails, nothing is saved.
 -- =====================================================================
 begin;
+
+do $$ begin
+  if exists (select 1 from public.service_catalog where code = 'root_canal') then
+    raise exception 'Seed 05 has already been applied';
+  end if;
+end $$;
 
 select set_config('request.jwt.claims', '{"app_metadata":{"role":"admin"}}', true);
 
@@ -171,11 +179,11 @@ insert into public.facility_insurance_acceptances
  ('30000000-0000-4000-8000-000000000006','20000000-0000-4000-8000-000000000001',null,'major_dental',true,'direct','verified','staff','https://paddington-dental.example.com/insurance','Direct claiming is available for Sunstate Health Fund.',now(),current_date - 30,now()),
  ('30000000-0000-4000-8000-000000000006','20000000-0000-4000-8000-000000000002',null,'major_dental',true,'manual','verified','staff','https://paddington-dental.example.com/insurance','Harbourside claims are submitted by the patient.',now(),current_date - 30,now()),
  ('30000000-0000-4000-8000-000000000007','20000000-0000-4000-8000-000000000001',null,'major_dental',true,'manual','verified','staff','https://southbank-endo.example.com/fees','Payment is required on the day; we provide itemised receipts for claims.',now(),current_date - 30,now()),
- ('30000000-0000-4000-8000-000000000007','20000000-0000-4000-8000-000000000005',null,'major_dental',true,'manual','verified','staff','https://southbank-endo.example.com/fees','OSHC patients pay on the day and claim from their fund.',now(),current_date - 30,now()),
+ ('30000000-0000-4000-8000-000000000007','20000000-0000-4000-8000-000000000003',null,'major_dental',true,'manual','verified','staff','https://southbank-endo.example.com/fees','OSHC patients pay on the day and claim from their fund.',now(),current_date - 30,now()),
  ('30000000-0000-4000-8000-000000000008','20000000-0000-4000-8000-000000000001',null,'major_dental',true,'direct','verified','staff','https://kedron-dental.example.com/insurance','We direct bill Sunstate Health Fund for major dental.',now(),current_date - 30,now()),
  ('30000000-0000-4000-8000-000000000008','20000000-0000-4000-8000-000000000004',null,'major_dental',false,'not_supported','verified','staff','https://kedron-dental.example.com/insurance','Wanderer Visitor Cover is not accepted at this clinic.',now(),current_date - 30,now()),
  ('30000000-0000-4000-8000-000000000009','20000000-0000-4000-8000-000000000002',null,'major_dental',true,'direct','verified','staff','https://toowong-dental.example.com/insurance','HICAPS direct claiming is available.',now(),current_date - 30,now()),
- ('30000000-0000-4000-8000-000000000009','20000000-0000-4000-8000-000000000005',null,'major_dental',true,'manual','verified','staff','https://toowong-dental.example.com/insurance','OSHC claims are paid upfront and claimed by the patient.',now(),current_date - 30,now()),
+ ('30000000-0000-4000-8000-000000000009','20000000-0000-4000-8000-000000000003',null,'major_dental',true,'manual','verified','staff','https://toowong-dental.example.com/insurance','OSHC claims are paid upfront and claimed by the patient.',now(),current_date - 30,now()),
  ('30000000-0000-4000-8000-000000000010','20000000-0000-4000-8000-000000000001',null,'major_dental',true,'direct','verified','staff','https://carindale-dental.example.com/insurance','Direct billing is available for selected Sunstate extras.',now(),current_date - 30,now()),
  ('30000000-0000-4000-8000-000000000010','20000000-0000-4000-8000-000000000002',null,'major_dental',true,'manual','verified','staff','https://carindale-dental.example.com/insurance','Harbourside patients pay and claim.',now(),current_date - 30,now());
 

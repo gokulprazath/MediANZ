@@ -2,8 +2,10 @@
 -- DEVELOPMENT ONLY: real engines for consult notes.
 --   * SLM (extraction, explain questions, second opinions): Nebius Token Factory
 --   * Decision engine (key points): Jev, TypeSafe AI System One
--- Run in the SQL Editor after 20261028010000_key_point_second_opinion.sql and
--- seed 04 (which turns the mock engines on).
+-- Run in the SQL Editor after seed 04 (which turns the mock engines on) and
+-- both consult-notes migrations:
+--   20261028000000_consult_key_points.sql
+--   20261028010000_key_point_second_opinion.sql (adds the explain kind)
 --
 -- The Python side reads endpoints, keys and models from the environment:
 -- SLM_BASE_URL / SLM_API_KEY / SLM_MODEL and JEV_API_KEY / JEV_MODEL. The
@@ -24,9 +26,10 @@
 -- =====================================================================
 begin;
 
--- One enabled engine per capability: turn the mocks off first.
+-- One enabled engine per capability: turn the others off first.
 update public.model_registry set enabled = false
- where engine in ('mock_extraction', 'mock_decision');
+ where capability in ('extraction', 'decision')
+   and engine not in ('slm', 'jev');
 
 update public.model_registry
    set provider = 'Nebius Token Factory',
