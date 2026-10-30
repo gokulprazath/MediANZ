@@ -594,20 +594,61 @@ async def test_discover_resolves_problem_text_and_adds_description() -> None:
 
 @pytest.mark.asyncio
 async def test_ambiguous_problem_text_returns_candidates() -> None:
-    repository = FakeRepository(candidates=[SERVICE])
+    other = SERVICE.model_copy(
+        update={"id": UUID(int=5), "code": "emergency_dental", "name": "Emergency"}
+    )
+    repository = FakeRepository(candidates=[SERVICE, other])
     service = DiscoveryService(repository)  # type: ignore[arg-type]
 
     with pytest.raises(NeedsServiceClarification) as exc:
         await service.discover(
             context(),
             DiscoveryRequest(
-                problem_text="I have tooth pain",
-                latitude=-27.48,
-                longitude=153.01,
+                problem_text="dentist for tooth pain", latitude=-27.48, longitude=153.01
             ),
         )
 
-    assert exc.value.candidates == (SERVICE,)
+    assert exc.value.candidates == (SERVICE, other)
+
+
+@pytest.mark.asyncio
+async def test_a_single_alias_match_needs_no_question() -> None:
+    service = DiscoveryService(FakeRepository(candidates=[SERVICE]))  # type: ignore[arg-type]
+    result = await service.discover(
+        context(),
+        DiscoveryRequest(problem_text="I have tooth pain", latitude=-27.48, longitude=153.01),
+    )
+    assert result.service == SERVICE
+
+
+@pytest.mark.asyncio
+async def test_plain_words_find_the_service_when_no_alias_matches() -> None:
+    service = DiscoveryService(FakeRepository())  # type: ignore[arg-type]
+    result = await service.discover(
+        context(),
+        DiscoveryRequest(
+            problem_text="Endodontic follow-up please", latitude=-27.48, longitude=153.01
+        ),
+    )
+    assert result.service == SERVICE  # root_canal, from the catalog
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_text_offers_every_service_gp_first() -> None:
+    gp = SERVICE.model_copy(
+        update={"id": UUID(int=1), "code": "gp_standard", "name": "Standard GP"}
+    )
+
+    class Catalog(FakeRepository):
+        async def list_services(self, ctx: Context) -> list[Service]:
+            return [SERVICE, gp]
+
+    service = DiscoveryService(Catalog())  # type: ignore[arg-type]
+    with pytest.raises(NeedsServiceClarification) as exc:
+        await service.discover(
+            context(), DiscoveryRequest(problem_text="not sure", latitude=-27.48, longitude=153.01)
+        )
+    assert exc.value.candidates == (gp, SERVICE)
 
 
 @pytest.mark.asyncio
@@ -620,7 +661,6 @@ async def test_unknown_service_raises_not_found() -> None:
             context(),
             DiscoveryRequest(
                 service_code="not_a_service",
-                problem_text="something else",
                 latitude=-27.48,
                 longitude=153.01,
             ),

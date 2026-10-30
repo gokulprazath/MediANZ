@@ -102,6 +102,9 @@ One line per assumption. Spec: `docs/FRONTEND_SPEC_A_NOW.md`.
 - The conversation lives in `ConversationProvider` in the patient layout (memory only, never browser storage): it survives moving between patient pages, a reply arriving after the patient left still lands, and it ends on sign-out or when another patient signs in. Each message sends the last 12 turns (2000 characters each, under the proxy's 32 KB limit) so follow-ups make sense.
 - A drafted GP question shows who it goes to ("To Dr Asha Rao, about your visit on ..."); booking and question outcomes are kept on the turn, so returning to the page never re-offers a confirmed booking.
 
+## Find care location
+- Suburb or postcode: the sample table first, then any Australian place through `/api/places/lookup` (Google Places Text Search with the server-only `GOOGLE_PLACES_API_KEY`; signed-in users only; results outside Australia or that aren't a postcode or locality are refused). The place is kept in memory only, never stored or logged.
+
 ## Tests
 - Unit tests (`tests/unit`, Vitest, jsdom, TZ Australia/Brisbane) use the mock store directly with a fixed "now" (Friday 30 Oct 2026, 11 am Brisbane).
 - E2E (`tests/e2e`, Playwright, Chromium only) run one at a time against `next dev` on port 3100 in mock mode; each test resets the mock database. `PW_CHROMIUM_PATH` lets the suite use a preinstalled Chromium when it differs from Playwright's pinned build.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -40,6 +41,52 @@ from healthmcp.shared.context import Context
 _DEFAULT_WINDOW_DAYS = 30
 _TOP_CATEGORY_RESULTS = 10
 
+# Plain words for each service, for problem text the catalog's aliases miss
+# ("I've been tired for weeks"). Checked in order, most specific first; the
+# first match wins. Anything else is offered as a choice, GP first, because a
+# GP visit is the usual first step. Codes are service_catalog.code (seed 05).
+_KEYWORDS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pattern, re.IGNORECASE), code)
+    for pattern, code in (
+        (r"\b(root canal|endodont\w*)", "root_canal"),
+        (
+            r"\b(tooth ?ache|tooth pain|(broken|chipped|cracked|knocked out) tooth|"
+            r"dental (pain|emergency)|abscess|swollen (gum|jaw|face))",
+            "emergency_dental",
+        ),
+        (
+            r"\b(dental|dentist|teeth|tooth|gums?|check-?up and clean|scale and clean)\b",
+            "dental_check",
+        ),
+        (r"\b(vaccin\w*|immuni[sz]\w*|flu (shot|jab|vaccine)|booster|jab)\b", "vaccination"),
+        (r"\b(skin|moles?|freckles?|melanoma)\b", "skin_check"),
+        (
+            r"\b(long (appointment|consult\w*)|mental health|care plan|anxi\w*|depress\w*|"
+            r"several (things|issues|problems))\b",
+            "gp_long",
+        ),
+        (
+            r"\b(gp|doctor|check-?up|blood tests?|results?|prescriptions?|scripts?|referral|"
+            r"tired\w*|fatigue|exhausted|fever|temperature|cough\w*|colds?|flu|sore|pain\w*|"
+            r"ache\w*|hurts?|headaches?|migraines?|dizz\w*|nause\w*|vomit\w*|rash\w*|"
+            r"infections?|ears?|throat|chest|stomach|back|blood pressure|iron|sick|unwell)\b",
+            "gp_standard",
+        ),
+    )
+)
+_CHOICE_FIRST = ("gp_standard", "gp_long")
+
+
+def _keyword_service(text: str) -> str | None:
+    return next((code for pattern, code in _KEYWORDS if pattern.search(text)), None)
+
+
+def _choice_order(service: Service) -> tuple[int, str]:
+    first = (
+        _CHOICE_FIRST.index(service.code) if service.code in _CHOICE_FIRST else len(_CHOICE_FIRST)
+    )
+    return first, service.name
+
 
 def _today() -> date:
     return datetime.now(UTC).date()
@@ -64,8 +111,19 @@ class DiscoveryService:
             service, candidates = await self._repo.resolve_service(ctx, None, text)
             if service is not None:
                 return service
+        if len(candidates) == 1:
+            return candidates[0]
         if candidates:
             raise NeedsServiceClarification(tuple(candidates))
+        if text:
+            # The aliases missed it: plain keywords, else let the patient choose.
+            catalog = await self._repo.list_services(ctx)
+            code = _keyword_service(text)
+            chosen = next((s for s in catalog if s.code == code), None)
+            if chosen is not None:
+                return chosen
+            if catalog:
+                raise NeedsServiceClarification(tuple(sorted(catalog, key=_choice_order)))
         raise ServiceNotFound()
 
     async def discover(self, ctx: Context, request: DiscoveryRequest) -> DiscoveryResponse:

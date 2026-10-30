@@ -259,3 +259,6 @@ New decisions are appended; old decisions are not silently rewritten.
   `/discovery`; the gateway and the seven MCP servers run in the same process over in-process ASGI
   transports (same tokens, allowlist, mode checks and rate limits), with one shared pool. `web` binds to it as
   `BACKEND_URL`. The consult worker is a daemon (`Dockerfile.worker`). Locally the services stay separate.
+- Discovery service matching: a single alias match books straight away; when no alias matches, plain
+  keywords (tired, sore, teeth, mole, flu shot...) pick the service; otherwise the patient chooses from
+  every active service, GP first. It no longer answers SERVICE_NOT_FOUND for free text.

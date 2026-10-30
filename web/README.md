@@ -30,6 +30,7 @@ npm run dev                  # http://localhost:3000
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` or `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | live | The anon / publishable key. The service role key is never used. |
 | `NEXT_PUBLIC_GOOGLE_MAPS_KEY` | no | Maps JavaScript API key, restricted by HTTP referrer. Without it the finder shows the list view and a note. |
 | `NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID` | no | Map id for advanced markers (defaults to Google's `DEMO_MAP_ID`). |
+| `GOOGLE_PLACES_API_KEY` | no | Server-only (the same key as the Python services). Lets Find care accept any Australian suburb or postcode through `/api/places/lookup` (Places Text Search, signed-in users only); without it only the sample suburbs in `config/postcodes.ts` are known. |
 | `NEXT_PUBLIC_DEMO_LOGIN` | no | `true` shows "Demo account" on the login page in live mode (mock mode always shows it). |
 | `DEMO_LOGIN_ENABLED`, `DEMO_PASSWORD` | demo login | Server-only: turn the live demo login on, and the demo accounts' password. Optional `DEMO_PATIENT_EMAIL`, `DEMO_CLINICIAN_EMAIL`, `DEMO_RECEPTIONIST_EMAIL`. |
 

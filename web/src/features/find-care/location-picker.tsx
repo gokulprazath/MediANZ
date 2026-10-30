@@ -30,12 +30,47 @@ export function RadiusInput() {
   );
 }
 
-// Browser location if allowed; otherwise a suburb or postcode from the local table.
+// Browser location if allowed; otherwise a suburb or postcode: the local table
+// first (instant), then any Australian place through /api/places/lookup.
 export function LocationPicker() {
   const { location, setLocation } = useFindCare();
   const [status, setStatus] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | undefined>();
+  const [looking, setLooking] = useState(false);
+
+  const setPlace = async () => {
+    const q = query.trim();
+    const known = findPlace(q);
+    if (known) {
+      setError(undefined);
+      setLocation({ lat: known.lat, lng: known.lng, label: `${known.suburb} ${known.postcode}`, source: "postcode" });
+      return;
+    }
+    if (q.length < 2) {
+      setError("Enter a suburb or a 4-digit postcode.");
+      return;
+    }
+    setLooking(true);
+    try {
+      const res = await fetch(`/api/places/lookup?q=${encodeURIComponent(q)}`);
+      if (res.ok) {
+        const place = (await res.json()) as { lat: number; lng: number; label: string };
+        setError(undefined);
+        setLocation({ lat: place.lat, lng: place.lng, label: place.label, source: "postcode" });
+      } else {
+        setError(
+          res.status === 404 || res.status === 400
+            ? "We couldn't find that suburb or postcode in Australia. Check the spelling or try a postcode."
+            : "Finding places isn't available right now. Try a suburb from the list or use your location.",
+        );
+      }
+    } catch {
+      setError("Finding places isn't available right now. Try a suburb from the list or use your location.");
+    } finally {
+      setLooking(false);
+    }
+  };
 
   const useDevice = () => {
     if (!("geolocation" in navigator)) {
@@ -64,13 +99,7 @@ export function LocationPicker() {
           className="flex flex-wrap items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            const place = findPlace(query);
-            if (!place) {
-              setError("We don't know that suburb or postcode yet. Try one from the list.");
-              return;
-            }
-            setError(undefined);
-            setLocation({ lat: place.lat, lng: place.lng, label: `${place.suburb} ${place.postcode}`, source: "postcode" });
+            void setPlace();
           }}
         >
           <Field label="Or suburb / postcode" error={error} className="w-56">
@@ -83,8 +112,8 @@ export function LocationPicker() {
               </option>
             ))}
           </datalist>
-          <Button type="submit" variant="secondary">
-            Set
+          <Button type="submit" variant="secondary" disabled={looking}>
+            {looking ? "Finding…" : "Set"}
           </Button>
         </form>
       </div>
