@@ -2,6 +2,7 @@
 // the SQL it stands for: the RLS policy (who can see or change which rows),
 // the RPC body, the triggers and the check / exclusion constraints, and it
 // raises the same error messages, so the app behaves the same in both modes.
+import { runMockConsultWorker } from "./agent-layer";
 import {
   DataError,
   type AppointmentFilter,
@@ -419,6 +420,34 @@ export function createMockApi(state: MockState, uid: Uuid | null, options: MockA
   // ---------------------------------------------------------------------------
   // The API
   // ---------------------------------------------------------------------------
+  // consult_transcripts_before_delete: transcript-derived drafts go with the transcript.
+  const removeAgentDrafts = (appointmentId: Uuid) => {
+    const L = state.agent;
+    L.consult_key_points = L.consult_key_points.filter((k) => k.appointment_id !== appointmentId || k.status !== "draft");
+    L.clinical_facts = L.clinical_facts.filter((f) => f.appointment_id !== appointmentId || f.status !== "draft");
+    L.transcript_segments = L.transcript_segments.filter((x) => x.appointment_id !== appointmentId);
+  };
+  // _can_review_appointment: the treating clinician or staff.
+  const canReview = (appointmentId: Uuid) => {
+    const a = appointmentById(appointmentId);
+    return !!a && (isStaff() || (ctx().clinicianId !== null && a.clinician_id === ctx().clinicianId));
+  };
+  const isPatientOf = (appointmentId: Uuid) => {
+    const a = appointmentById(appointmentId);
+    return !!a && ctx().patientId !== null && a.patient_id === ctx().patientId;
+  };
+  const inFilter = <T extends { appointment_id: Uuid; status: string }>(rows: T[], f: { appointmentIds?: Uuid[]; statuses?: string[] }) =>
+    rows.filter((r) => (!f.appointmentIds || f.appointmentIds.includes(r.appointment_id)) && (!f.statuses || f.statuses.includes(r.status)));
+  const newestFirst = <T extends { created_at: string }>(rows: T[]) => sortBy(rows, (r) => r.created_at, true).map(clone);
+  const lockForReview = <T extends { appointment_id: Uuid; status: string }>(row: T | undefined, what: string): T => {
+    if (!row) return fail(`${what} not found`, "P0002");
+    if (!canReview(row.appointment_id)) fail(`Only the treating clinician or staff can review this ${what.toLowerCase()}`, "42501");
+    if (row.status !== "draft") fail(`${what} is not a draft`, "23514");
+    return row;
+  };
+  const reviewed = () => ({ reviewed_by: uid, reviewed_at: nowIso(), updated_at: nowIso() });
+  const hoursWindow = (hours = 24) => new Date(now().getTime() - Math.max(1, Math.min(hours, 720)) * 3_600_000).toISOString();
+
   const api: DataApi = {
     async whoami(): Promise<Me | null> {
       if (!uid || !state.users.some((u) => u.id === uid)) return null;
@@ -891,6 +920,7 @@ export function createMockApi(state: MockState, uid: Uuid | null, options: MockA
         }
       }
       state.consult_transcripts = state.consult_transcripts.filter((t) => t.appointment_id !== appointmentId);
+      removeAgentDrafts(appointmentId);
       for (const s of state.recording_sessions.filter((x) => x.appointment_id === appointmentId)) {
         setSessionStatus(s.id, { status: "consent_withdrawn", audio_discarded_at: s.audio_discarded_at ?? at });
       }
@@ -1066,6 +1096,8 @@ export function createMockApi(state: MockState, uid: Uuid | null, options: MockA
       if (t.review_expires_at < nowIso()) fail("Review window has expired");
       Object.assign(t, { status: "approved", approved_at: nowIso(), updated_at: nowIso() });
       setSessionStatus(t.recording_session_id, { status: "approved" });
+      // consult_transcripts_queue_notes -> the consult-notes worker drafts key points and facts.
+      runMockConsultWorker(state.agent, t, appointmentById(t.appointment_id)!.patient_id, nowIso());
     },
     async rejectTranscript(id) {
       const c = ctx();
@@ -1484,6 +1516,195 @@ export function createMockApi(state: MockState, uid: Uuid | null, options: MockA
       if (row.status === "submitted") row.submitted_at ??= at;
       if (["approved", "rejected", "paid"].includes(row.status)) row.processed_at ??= at;
       return clone(row);
+    },
+
+    // Part B: patient_check_in
+    async patientCheckIn(appointmentId) {
+      const a = appointmentById(appointmentId);
+      if (!a || !isPatientOf(appointmentId)) return fail("Appointment not found", "P0002");
+      if (a.status !== "booked" && a.status !== "confirmed") fail("Only a booked appointment can be checked in", "23514");
+      const start = Date.parse(a.scheduled_start);
+      const t = now().getTime();
+      if (t < start - 30 * 60_000 || t > start + 15 * 60_000) {
+        fail("Self check-in opens 30 minutes before the appointment and closes 15 minutes after it starts", "23514");
+      }
+      setStatus(a, "checked_in");
+    },
+
+    // agent layer: reference data (read: signed-in users)
+    async listDecisionQuestions() {
+      ctx();
+      return state.agent.decision_questions.map(clone);
+    },
+    async listClinicalFields() {
+      ctx();
+      return state.agent.clinical_fields.map(clone);
+    },
+
+    // agent layer: drafts and approved rows
+    async listKeyPoints(filter = {}) {
+      ctx();
+      return newestFirst(
+        inFilter(state.agent.consult_key_points, filter).filter(
+          (k) => canReview(k.appointment_id) || (k.status === "approved" && isPatientOf(k.appointment_id)),
+        ),
+      );
+    },
+    async listClinicalFacts(filter = {}) {
+      ctx();
+      return newestFirst(
+        inFilter(state.agent.clinical_facts, filter).filter(
+          (x) =>
+            (!filter.patientId || x.patient_id === filter.patientId) &&
+            (canReview(x.appointment_id) || ((x.status === "approved" || x.status === "superseded") && x.patient_id === ctx().patientId)),
+        ),
+      );
+    },
+    async listOpenItems(filter = {}) {
+      ctx();
+      return newestFirst(inFilter(state.agent.open_items, filter).filter((x) => canReview(x.appointment_id)));
+    },
+    async listGpQueries(filter = {}) {
+      ctx();
+      // Part B policy: the appointment's patient also reads their questions.
+      return newestFirst(
+        inFilter(state.agent.gp_queries, filter).filter((x) => canReview(x.appointment_id) || isPatientOf(x.appointment_id)),
+      );
+    },
+    async listTranscriptSegments(appointmentId) {
+      ctx();
+      const a = appointmentById(appointmentId);
+      if (!a || !(isPatientOf(appointmentId) || a.clinician_id === ctx().clinicianId)) return [];
+      return sortBy(state.agent.transcript_segments.filter((x) => x.appointment_id === appointmentId), (x) => x.seq).map(clone);
+    },
+    async listConsultNoteRuns(appointmentIds) {
+      ctx();
+      return sortBy(
+        state.agent.consult_note_runs.filter(
+          (r) => (!appointmentIds || appointmentIds.includes(r.appointment_id)) && (canReview(r.appointment_id) || isPatientOf(r.appointment_id)),
+        ),
+        (r) => r.queued_at,
+        true,
+      ).map(clone);
+    },
+
+    // agent layer: human-only review functions
+    async approveKeyPoint(id) {
+      const k = lockForReview(state.agent.consult_key_points.find((x) => x.id === id), "Key point");
+      Object.assign(k, { status: "approved" }, reviewed());
+    },
+    async editAndApproveKeyPoint(id, answer) {
+      const k = lockForReview(state.agent.consult_key_points.find((x) => x.id === id), "Key point");
+      const question = state.agent.decision_questions.find((x) => x.id === k.question_id && x.version === k.question_version);
+      const option = question?.options.find((o) => o.value === answer);
+      if (!option) fail("Answer is not an option of this question", "23514");
+      Object.assign(
+        k,
+        {
+          status: "approved",
+          answer,
+          answer_label: option!.label ?? option!.description ?? null,
+          level: k.kind === "score" ? (option!.level ?? null) : null,
+          answer_edited: answer !== k.answer,
+        },
+        reviewed(),
+      );
+    },
+    async editAndApproveKeyPointText(id, text) {
+      const k = lockForReview(state.agent.consult_key_points.find((x) => x.id === id), "Key point");
+      if (k.kind !== "explain") fail("Only explain key points take text");
+      const v = text.trim();
+      if (v.length < 1 || v.length > 1000) fail("Explanation must be 1 to 1000 characters");
+      Object.assign(k, { status: "approved", answer: "answered", answer_text: v, answer_edited: v !== k.answer_text }, reviewed());
+    },
+    async rejectKeyPoint(id) {
+      const k = lockForReview(state.agent.consult_key_points.find((x) => x.id === id), "Key point");
+      Object.assign(k, { status: "rejected" }, reviewed());
+    },
+    async approveFact(id) {
+      const f = lockForReview(state.agent.clinical_facts.find((x) => x.id === id), "Fact");
+      Object.assign(f, { status: "approved", approved_by: uid, approved_at: nowIso(), updated_at: nowIso() });
+    },
+    async editAndApproveFact(id, value) {
+      const f = lockForReview(state.agent.clinical_facts.find((x) => x.id === id), "Fact");
+      if (value === null || value === undefined || value === "") fail("Value does not match the field's schema", "23514");
+      Object.assign(f, {
+        status: "approved",
+        value,
+        value_edited: JSON.stringify(value) !== JSON.stringify(f.value),
+        approved_by: uid,
+        approved_at: nowIso(),
+        updated_at: nowIso(),
+      });
+    },
+    async rejectFact(id) {
+      const f = lockForReview(state.agent.clinical_facts.find((x) => x.id === id), "Fact");
+      Object.assign(f, { status: "rejected", updated_at: nowIso() });
+    },
+    async resolveOpenItem(id, resolution) {
+      const o = state.agent.open_items.find((x) => x.id === id);
+      if (!o) return fail("Open item not found", "P0002");
+      if (!canReview(o.appointment_id)) fail("Only the treating clinician or staff can resolve this", "42501");
+      if (o.status !== "open") fail("Open item is already resolved", "23514");
+      Object.assign(o, { status: "resolved", resolution: resolution.trim() || null, resolved_by: uid, resolved_at: nowIso(), updated_at: nowIso() });
+    },
+    async answerGpQuery(id, answer) {
+      const g = state.agent.gp_queries.find((x) => x.id === id);
+      if (!g) return fail("GP query not found", "P0002");
+      if (!canReview(g.appointment_id)) fail("Only the treating clinician or staff can answer this", "42501");
+      if (g.status !== "open") fail("GP query is already answered", "23514");
+      const v = answer.trim();
+      if (v.length < 1 || v.length > 4000) checkViolation("gp_queries", "gp_queries_answer_check");
+      Object.assign(g, { status: "answered", answer: v, answered_by: uid, answered_at: nowIso(), updated_at: nowIso() });
+    },
+
+    // operations (staff only, aggregates only)
+    async getAgentActivity(hours = 24) {
+      if (!isStaff()) fail("Only staff can view agent activity", "42501");
+      const since = hoursWindow(hours);
+      const groups = new Map<string, typeof state.agent.agent_access_log>();
+      for (const r of state.agent.agent_access_log) {
+        if (r.created_at < since) continue;
+        const key = `${r.agent_id}|${r.server}|${r.tool}`;
+        groups.set(key, [...(groups.get(key) ?? []), r]);
+      }
+      return [...groups.values()]
+        .map((rows) => {
+          const lat = rows.map((r) => r.latency_ms).sort((a, b) => a - b);
+          return {
+            agent_id: rows[0].agent_id,
+            server: rows[0].server,
+            tool: rows[0].tool,
+            calls: rows.length,
+            errors: rows.filter((r) => !r.ok).length,
+            avg_latency_ms: Math.round(lat.reduce((s2, x) => s2 + x, 0) / lat.length),
+            p95_latency_ms: lat[Math.min(lat.length - 1, Math.ceil(lat.length * 0.95) - 1)],
+            last_call_at: rows.map((r) => r.created_at).sort().at(-1) ?? null,
+          };
+        })
+        .sort((a, b) => b.calls - a.calls);
+    },
+    async getEngineActivity(hours = 24) {
+      if (!isStaff()) fail("Only staff can view agent activity", "42501");
+      const since = hoursWindow(hours);
+      const groups = new Map<string, typeof state.agent.decision_log>();
+      for (const r of state.agent.decision_log) {
+        if (r.created_at < since) continue;
+        groups.set(r.engine, [...(groups.get(r.engine) ?? []), r]);
+      }
+      return [...groups.values()]
+        .map((rows) => ({
+          engine: rows[0].engine,
+          model: rows[0].model,
+          calls: rows.length,
+          avg_latency_ms: Math.round(rows.reduce((s2, r) => s2 + r.latency_ms, 0) / rows.length),
+          last_call_at: rows.map((r) => r.created_at).sort().at(-1) ?? null,
+        }))
+        .sort((a, b) => b.calls - a.calls);
+    },
+    async listModelRegistry() {
+      if (!isStaff()) return [];
+      return state.agent.model_registry.map(clone);
     },
   };
   return api;

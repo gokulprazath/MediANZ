@@ -54,6 +54,19 @@ import type {
   VisitVitals,
   VisitVitalsLatest,
   VitalsInput,
+  AgentActivityRow,
+  ClinicalFact,
+  ClinicalField,
+  ConsultKeyPoint,
+  ConsultNoteRun,
+  DecisionQuestion,
+  EngineActivityRow,
+  FactStatus,
+  GpQuery,
+  KeyPointStatus,
+  ModelRegistryRow,
+  OpenItem,
+  TranscriptSegmentRow,
 } from "@/types/db";
 
 export type AppRole = "staff" | "admin" | null;
@@ -252,6 +265,43 @@ export interface DataApi {
   listClaims(appointmentIds?: Uuid[]): Promise<InsuranceClaim[]>;
   createClaim(input: ClaimInsert): Promise<InsuranceClaim>;
   updateClaim(id: Uuid, patch: ClaimUpdate): Promise<InsuranceClaim>;
+
+  // Part B: patient self check-in (patient_check_in RPC)
+  patientCheckIn(appointmentId: Uuid): Promise<void>;
+
+  // agent layer: reference data
+  listDecisionQuestions(): Promise<DecisionQuestion[]>;
+  listClinicalFields(): Promise<ClinicalField[]>;
+
+  // agent layer: drafts for human review (RLS: treating clinician or staff;
+  // the patient sees approved facts / key points of their own visits)
+  listKeyPoints(filter?: AgentRowFilter<KeyPointStatus>): Promise<ConsultKeyPoint[]>;
+  listClinicalFacts(filter?: AgentRowFilter<FactStatus> & { patientId?: Uuid }): Promise<ClinicalFact[]>;
+  listOpenItems(filter?: AgentRowFilter<"open" | "resolved">): Promise<OpenItem[]>;
+  listGpQueries(filter?: AgentRowFilter<"open" | "answered">): Promise<GpQuery[]>;
+  listTranscriptSegments(appointmentId: Uuid): Promise<TranscriptSegmentRow[]>;
+  listConsultNoteRuns(appointmentIds?: Uuid[]): Promise<ConsultNoteRun[]>;
+
+  // agent layer: human-only review functions
+  approveKeyPoint(id: Uuid): Promise<void>;
+  editAndApproveKeyPoint(id: Uuid, answer: string): Promise<void>;
+  editAndApproveKeyPointText(id: Uuid, text: string): Promise<void>;
+  rejectKeyPoint(id: Uuid): Promise<void>;
+  approveFact(id: Uuid): Promise<void>;
+  editAndApproveFact(id: Uuid, value: unknown): Promise<void>;
+  rejectFact(id: Uuid): Promise<void>;
+  resolveOpenItem(id: Uuid, resolution: string): Promise<void>;
+  answerGpQuery(id: Uuid, answer: string): Promise<void>;
+
+  // operations (staff): counts and latency only, never patient data
+  getAgentActivity(hours?: number): Promise<AgentActivityRow[]>;
+  getEngineActivity(hours?: number): Promise<EngineActivityRow[]>;
+  listModelRegistry(): Promise<ModelRegistryRow[]>;
+}
+
+export interface AgentRowFilter<S extends string> {
+  appointmentIds?: Uuid[];
+  statuses?: S[];
 }
 
 // Realtime is separate from the request/response API: only appointment_slots
@@ -334,6 +384,27 @@ export const DATA_API_METHODS = [
   "listClaims",
   "createClaim",
   "updateClaim",
+  "patientCheckIn",
+  "listDecisionQuestions",
+  "listClinicalFields",
+  "listKeyPoints",
+  "listClinicalFacts",
+  "listOpenItems",
+  "listGpQueries",
+  "listTranscriptSegments",
+  "listConsultNoteRuns",
+  "approveKeyPoint",
+  "editAndApproveKeyPoint",
+  "editAndApproveKeyPointText",
+  "rejectKeyPoint",
+  "approveFact",
+  "editAndApproveFact",
+  "rejectFact",
+  "resolveOpenItem",
+  "answerGpQuery",
+  "getAgentActivity",
+  "getEngineActivity",
+  "listModelRegistry",
 ] as const satisfies readonly (keyof DataApi)[];
 
 // Compile-time check that the list above names every method.

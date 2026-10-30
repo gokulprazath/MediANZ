@@ -37,6 +37,7 @@ import type {
   Uuid,
   VisitVitals,
 } from "@/types/db";
+import { emptyAgentLayer, runMockConsultWorker, seedResearchDrafts, type AgentLayerState } from "./agent-layer";
 import { seedUsers, type MockUser } from "./users";
 
 export interface ChunkRow {
@@ -77,6 +78,7 @@ export interface MockState {
   consult_transcripts: ConsultTranscript[];
   clinician_ratings: ClinicianRating[];
   visit_vitals: VisitVitals[];
+  agent: AgentLayerState; // agent layer and Part B (see agent-layer.ts)
   counters: Record<string, number>;
 }
 
@@ -298,6 +300,7 @@ export function buildSeed(now: Date = new Date()): MockState {
     consult_transcripts: [],
     clinician_ratings: [],
     visit_vitals: [],
+    agent: emptyAgentLayer(),
     counters: {},
   };
 
@@ -1090,6 +1093,44 @@ export function buildSeed(now: Date = new Date()): MockState {
     if (p) p.auth_user_id = u.id;
     const c = state.clinicians.find((x) => x.email?.toLowerCase() === u.email.toLowerCase());
     if (c) c.auth_user_id = u.id;
+  }
+
+  // 13. Agent layer (04_agent_layer_sample.sql builds segments for Olivia's
+  // approved transcript; the documentation agent then drafts key points and
+  // facts for Dr Rao to review). Plus one open GP question from Olivia.
+  const olivia2 = state.consult_transcripts.find((t) => t.id === TRANS(1))!;
+  runMockConsultWorker(state.agent, olivia2, a2.patient_id, ts(plusMin(new Date(olivia2.approved_at!), 5)));
+  state.agent.gp_queries.push({
+    id: "73000000-0000-4000-8000-000000000001",
+    appointment_id: a2.id,
+    question: "Can I take the iron supplement at the same time as my morning coffee?",
+    context_fact_ids: [],
+    status: "open",
+    answer: null,
+    answered_by: null,
+    answered_at: null,
+    created_by_agent: "insights-writer",
+    created_at: ts(new Date(now.getTime() - 26 * 3_600_000)),
+    updated_at: nowIso,
+  });
+  const plan = state.insurance_plans[0];
+  seedResearchDrafts(state.agent, ts(new Date(now.getTime() - 5 * 3_600_000)), {
+    plan: plan.id,
+    facility: state.facilities[0].id,
+    provider: plan.provider_id,
+  });
+  const hoursAgo = (h: number) => ts(new Date(now.getTime() - h * 3_600_000));
+  const sample: [string, string, string, boolean, number, number][] = [
+    ["patient-concierge", "matching", "find_gp_candidates", true, 310, 3],
+    ["patient-concierge", "matching", "get_fees", true, 95, 3],
+    ["patient-concierge", "booking", "propose_booking", true, 140, 2],
+    ["insights", "patient_record", "get_approved_facts", true, 80, 6],
+    ["insurance", "matching", "get_plan_coverage", true, 120, 4],
+    ["insurance", "web_research", "web_search", false, 2100, 4],
+    ["research-job", "web_research", "web_extract", true, 1650, 9],
+  ];
+  for (const [agent_id, server, tool, ok, latency_ms, h] of sample) {
+    state.agent.agent_access_log.push({ agent_id, server, tool, ok, latency_ms, created_at: hoursAgo(h) });
   }
 
   return state;

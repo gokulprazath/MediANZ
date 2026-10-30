@@ -508,6 +508,92 @@ export function createLiveApi(sb: SupabaseClient): DataApi {
     async updateClaim(id, patch) {
       return unwrap(await sb.from("insurance_claims").update(patch).eq("id", id).select("*").single());
     },
+
+    // Part B
+    async patientCheckIn(appointmentId) {
+      unwrap(await sb.rpc("patient_check_in", { p_appointment_id: appointmentId }));
+    },
+
+    // agent layer (RLS decides which rows come back)
+    async listDecisionQuestions() {
+      return unwrap(await sb.from("decision_questions").select("*").order("id"));
+    },
+    async listClinicalFields() {
+      return unwrap(await sb.from("clinical_fields").select("*").order("id"));
+    },
+    async listKeyPoints(filter = {}) {
+      let q = sb.from("consult_key_points").select("*").order("created_at", { ascending: false });
+      if (filter.appointmentIds) q = q.in("appointment_id", filter.appointmentIds);
+      if (filter.statuses) q = q.in("status", filter.statuses);
+      return unwrap(await q);
+    },
+    async listClinicalFacts(filter = {}) {
+      let q = sb.from("clinical_facts").select("*").order("created_at", { ascending: false });
+      if (filter.appointmentIds) q = q.in("appointment_id", filter.appointmentIds);
+      if (filter.patientId) q = q.eq("patient_id", filter.patientId);
+      if (filter.statuses) q = q.in("status", filter.statuses);
+      return unwrap(await q);
+    },
+    async listOpenItems(filter = {}) {
+      let q = sb.from("open_items").select("*").order("created_at", { ascending: false });
+      if (filter.appointmentIds) q = q.in("appointment_id", filter.appointmentIds);
+      if (filter.statuses) q = q.in("status", filter.statuses);
+      return unwrap(await q);
+    },
+    async listGpQueries(filter = {}) {
+      let q = sb.from("gp_queries").select("*").order("created_at", { ascending: false });
+      if (filter.appointmentIds) q = q.in("appointment_id", filter.appointmentIds);
+      if (filter.statuses) q = q.in("status", filter.statuses);
+      return unwrap(await q);
+    },
+    async listTranscriptSegments(appointmentId) {
+      return unwrap(
+        await sb.from("transcript_segments").select("*").eq("appointment_id", appointmentId).order("seq"),
+      );
+    },
+    async listConsultNoteRuns(appointmentIds) {
+      let q = sb.from("consult_note_runs").select("*").order("queued_at", { ascending: false });
+      if (appointmentIds) q = q.in("appointment_id", appointmentIds);
+      return unwrap(await q);
+    },
+    async approveKeyPoint(id) {
+      unwrap(await sb.rpc("approve_key_point", { p_key_point_id: id }));
+    },
+    async editAndApproveKeyPoint(id, answer) {
+      unwrap(await sb.rpc("edit_and_approve_key_point", { p_key_point_id: id, p_answer: answer }));
+    },
+    async editAndApproveKeyPointText(id, text) {
+      unwrap(await sb.rpc("edit_and_approve_key_point_text", { p_key_point_id: id, p_text: text }));
+    },
+    async rejectKeyPoint(id) {
+      unwrap(await sb.rpc("reject_key_point", { p_key_point_id: id }));
+    },
+    async approveFact(id) {
+      unwrap(await sb.rpc("approve_fact", { p_fact_id: id }));
+    },
+    async editAndApproveFact(id, value) {
+      unwrap(await sb.rpc("edit_and_approve_fact", { p_fact_id: id, p_value: value }));
+    },
+    async rejectFact(id) {
+      unwrap(await sb.rpc("reject_fact", { p_fact_id: id }));
+    },
+    async resolveOpenItem(id, resolution) {
+      unwrap(await sb.rpc("resolve_open_item", { p_open_item_id: id, p_resolution: resolution }));
+    },
+    async answerGpQuery(id, answer) {
+      unwrap(await sb.rpc("answer_gp_query", { p_gp_query_id: id, p_answer: answer }));
+    },
+
+    // operations
+    async getAgentActivity(hours = 24) {
+      return unwrap(await sb.rpc("get_agent_activity", { p_hours: hours }));
+    },
+    async getEngineActivity(hours = 24) {
+      return unwrap(await sb.rpc("get_engine_activity", { p_hours: hours }));
+    },
+    async listModelRegistry() {
+      return unwrap(await sb.from("model_registry").select("*").order("engine"));
+    },
   };
   return api;
 }

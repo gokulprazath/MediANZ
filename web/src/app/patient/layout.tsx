@@ -3,7 +3,9 @@ import { FindCareProvider } from "@/features/find-care/context";
 
 const NAV = [
   { href: "/patient", label: "Home", exact: true },
-  { href: "/patient/find", label: "Find care" },
+  { href: "/patient/concierge", label: "AI care finder" },
+  { href: "/patient/find", label: "Clinic map" },
+  { href: "/patient/assistant", label: "AI assistant" },
   { href: "/patient/appointments", label: "My appointments" },
   { href: "/patient/profile", label: "Profile" },
 ];

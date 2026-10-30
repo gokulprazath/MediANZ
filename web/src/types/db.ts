@@ -640,3 +640,200 @@ export const PATIENT_SUMMARY_COLUMNS =
   "id,first_name,last_name,preferred_name,date_of_birth,sex,phone,email";
 export const CLINICIAN_SUMMARY_COLUMNS = "id,first_name,last_name,clinician_type,specialty";
 export const FACILITY_SUMMARY_COLUMNS = "id,name,timezone,address_line1,suburb,state,postcode,phone";
+
+// ---------------------------------------------------------------------------
+// Agent layer (20261027000000_agent_layer.sql, 20261028000000_consult_key_points.sql,
+// 20261028010000_key_point_second_opinion.sql) and Part B (20261030000000_partb_live_agents.sql)
+// ---------------------------------------------------------------------------
+export type DecisionKind = "yes_no" | "choice" | "score" | "explain";
+
+export interface DecisionOption {
+  value: string;
+  label?: string;
+  level?: number;
+  description?: string;
+}
+
+export interface DecisionQuestion {
+  id: string;
+  version: number;
+  kind: DecisionKind;
+  text: string;
+  options: DecisionOption[];
+  threshold: number;
+  threshold_model_version: string | null;
+  active: boolean;
+  created_at: IsoTimestamp;
+}
+
+export interface ClinicalField {
+  id: string;
+  version: number;
+  label: string;
+  value_schema: Record<string, unknown>;
+  unit: string | null;
+  code_system: string | null;
+  topic: string;
+  active: boolean;
+  created_at: IsoTimestamp;
+}
+
+export const FACT_STATUSES = ["draft", "approved", "rejected", "superseded"] as const;
+export type FactStatus = (typeof FACT_STATUSES)[number];
+
+export interface ClinicalFact {
+  id: Uuid;
+  appointment_id: Uuid;
+  patient_id: Uuid;
+  field_id: string;
+  field_version: number;
+  value: unknown; // jsonb, shaped by clinical_fields.value_schema
+  unit: string | null;
+  code_system: string | null;
+  code: string | null;
+  status: FactStatus;
+  negated: boolean;
+  experiencer: "patient" | "family" | "other";
+  temporality: "current" | "past" | "future" | "unknown";
+  source: "transcript" | "clinician_entered";
+  source_segment_ids: Uuid[];
+  confidence: number | null;
+  engine: string | null;
+  model_version: string | null;
+  value_edited: boolean;
+  created_by_agent: string | null;
+  approved_by: Uuid | null;
+  approved_at: IsoTimestamp | null;
+  valid_from: IsoDate;
+  valid_to: IsoDate | null;
+  created_at: IsoTimestamp;
+  updated_at: IsoTimestamp;
+}
+
+export type KeyPointStatus = "draft" | "approved" | "rejected";
+
+export interface ConsultKeyPoint {
+  id: Uuid;
+  transcript_id: Uuid | null;
+  appointment_id: Uuid;
+  patient_id: Uuid;
+  question_id: string;
+  question_version: number;
+  kind: DecisionKind;
+  answer: string; // an option value ("answered" / "not_stated" for explain)
+  answer_label: string | null;
+  answer_text: string | null; // explain questions only
+  answer_source: "decision_engine" | "slm";
+  level: number | null;
+  probability: number;
+  threshold: number;
+  meets_threshold: boolean;
+  other_opinion_answer: string | null;
+  other_opinion_probability: number | null;
+  other_opinion_engine: string | null;
+  status: KeyPointStatus;
+  answer_edited: boolean;
+  source_segment_ids: Uuid[];
+  engine: string | null;
+  model_version: string | null;
+  created_by_agent: string | null;
+  reviewed_by: Uuid | null;
+  reviewed_at: IsoTimestamp | null;
+  created_at: IsoTimestamp;
+  updated_at: IsoTimestamp;
+}
+
+export interface OpenItem {
+  id: Uuid;
+  appointment_id: Uuid;
+  kind: "missing_info" | "conflict" | "urgent";
+  severity: number | null;
+  description: string;
+  related_fact_ids: Uuid[];
+  status: "open" | "resolved";
+  resolution: string | null;
+  resolved_by: Uuid | null;
+  resolved_at: IsoTimestamp | null;
+  created_by_agent: string | null;
+  created_at: IsoTimestamp;
+  updated_at: IsoTimestamp;
+}
+
+export interface GpQuery {
+  id: Uuid;
+  appointment_id: Uuid;
+  question: string;
+  context_fact_ids: Uuid[];
+  status: "open" | "answered";
+  answer: string | null;
+  answered_by: Uuid | null;
+  answered_at: IsoTimestamp | null;
+  created_by_agent: string | null;
+  created_at: IsoTimestamp;
+  updated_at: IsoTimestamp;
+}
+
+export interface TranscriptSegmentRow {
+  id: Uuid;
+  transcript_id: Uuid;
+  appointment_id: Uuid;
+  seq: number;
+  speaker: string | null;
+  speaker_confidence: number | null;
+  start_sec: number | null;
+  end_sec: number | null;
+  text: string;
+  char_start: number | null;
+  char_end: number | null;
+  created_at: IsoTimestamp;
+}
+
+export interface ConsultNoteRun {
+  id: Uuid;
+  transcript_id: Uuid;
+  appointment_id: Uuid;
+  status: "queued" | "running" | "done" | "failed";
+  attempts: number;
+  last_error: string | null;
+  facts_count: number;
+  key_points_count: number;
+  open_items_count: number;
+  queued_at: IsoTimestamp;
+  started_at: IsoTimestamp | null;
+  finished_at: IsoTimestamp | null;
+  created_at: IsoTimestamp;
+  updated_at: IsoTimestamp;
+}
+
+export interface ModelRegistryRow {
+  engine: string;
+  capability: "decision" | "extraction" | "search" | "places";
+  provider: string;
+  model: string;
+  model_version: string;
+  region: string | null;
+  zero_data_retention: boolean;
+  allow_health_data: boolean;
+  enabled: boolean;
+  created_at: IsoTimestamp;
+  updated_at: IsoTimestamp;
+}
+
+// get_agent_activity(p_hours) / get_engine_activity(p_hours)
+export interface AgentActivityRow {
+  agent_id: string;
+  server: string;
+  tool: string;
+  calls: number;
+  errors: number;
+  avg_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  last_call_at: IsoTimestamp | null;
+}
+export interface EngineActivityRow {
+  engine: string;
+  model: string | null;
+  calls: number;
+  avg_latency_ms: number | null;
+  last_call_at: IsoTimestamp | null;
+}
