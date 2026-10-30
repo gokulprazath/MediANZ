@@ -75,6 +75,11 @@ class Context:
             raise ScopeViolation("No patient is associated with this request.")
         return self.patient_id
 
+    def require_scope(self, scope: str) -> None:
+        """A write that needs explicit permission: the job token must carry this scope."""
+        if self.mode != "job" or scope not in self.scope:
+            raise ScopeViolation()
+
     def require_appointment(self, appointment_id: UUID | None = None) -> UUID:
         """In job mode, the appointment comes from the token; an argument must match it.
 

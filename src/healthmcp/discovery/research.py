@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -19,7 +20,9 @@ from openai import AsyncOpenAI
 from healthmcp.discovery.errors import ResearchUnavailable
 from healthmcp.discovery.models import (
     AcceptanceExtraction,
+    ClaimMode,
     CoverageExtraction,
+    CoverageStatus,
     ResearchRefreshRequest,
     ResearchRunSummary,
     ResearchTarget,
@@ -30,8 +33,9 @@ from healthmcp.shared.config import Settings
 from healthmcp.shared.context import Context
 from healthmcp.shared.engines.models import ExtractedPage
 from healthmcp.shared.engines.search import SearchEngine
-from healthmcp.shared.errors import DomainNotAllowed
+from healthmcp.shared.errors import DomainNotAllowed, EngineNotConfigured
 from healthmcp.shared.guards import DomainAllowlist
+from healthmcp.shared.repositories.model_registry import EngineEntry
 
 _RETRY_AFTER = timedelta(days=1)
 _MAX_PAGE_CHARS = 30_000
@@ -137,6 +141,78 @@ class OpenAIResearchExtractor:
         )
         assert isinstance(result, AcceptanceExtraction)
         return result
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_WORDS = re.compile(r"[a-z0-9]+")
+_MOCK_CONFIDENCE = 0.5
+_MAX_QUOTE_CHARS = 1000
+
+
+def _best_sentence(text: str, context: str) -> str:
+    """The sentence sharing the most words with the query (first one on a tie)."""
+    words = {w for w in _WORDS.findall(context.lower()) if len(w) > 3}
+    sentences = [s for s in _SENTENCE_END.split(text[:_MAX_PAGE_CHARS].strip()) if s.strip()]
+    if not sentences:
+        raise ResearchUnavailable("Page text has no sentences")
+    best = max(sentences, key=lambda s: sum(1 for w in words if w in s.lower()))
+    return best[:_MAX_QUOTE_CHARS].strip()
+
+
+class MockResearchExtractor:
+    """Deterministic keyword rules over the page text, used when model_registry enables
+    `mock_extraction`. The quote is always an exact sentence of the page, the confidence
+    is a fixed 0.5, and every result is still a pending draft for staff review."""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        pass
+
+    async def coverage(self, *, text: str, context: str) -> CoverageExtraction:
+        quote = _best_sentence(text, context)
+        lower = quote.lower()
+        if "exclud" in lower or "does not" in lower:
+            status = CoverageStatus.NOT_COVERED
+        elif "restricted" in lower:
+            status = CoverageStatus.PARTIALLY_COVERED
+        elif any(w in lower for w in ("covers", "covered", "includes", "pays")):
+            status = CoverageStatus.COVERED
+        else:
+            status = CoverageStatus.UNKNOWN
+        return CoverageExtraction(
+            coverage_status=status, evidence_quote=quote, confidence=_MOCK_CONFIDENCE
+        )
+
+    async def acceptance(self, *, text: str, context: str) -> AcceptanceExtraction:
+        quote = _best_sentence(text, context)
+        lower = quote.lower()
+        if "not accept" in lower or "does not" in lower:
+            accepted, mode = False, ClaimMode.NOT_SUPPORTED
+        elif "accept" in lower or "direct bill" in lower or "hicaps" in lower:
+            direct = "direct" in lower or "hicaps" in lower
+            accepted, mode = True, ClaimMode.DIRECT if direct else ClaimMode.MANUAL
+        else:
+            accepted, mode = False, ClaimMode.UNKNOWN
+        return AcceptanceExtraction(
+            accepted=accepted, claim_mode=mode, evidence_quote=quote, confidence=_MOCK_CONFIDENCE
+        )
+
+
+# Enabled extraction engine (model_registry) -> its research extractor. Anything else
+# fails: no fallback to another extractor, including the mock.
+RESEARCH_EXTRACTORS: Mapping[str, Callable[[Settings], ResearchExtractor]] = {
+    "slm": OpenAIResearchExtractor,
+    "mock_extraction": MockResearchExtractor,
+}
+
+
+def research_extractor(entry: EngineEntry, settings: Settings) -> ResearchExtractor:
+    factory = RESEARCH_EXTRACTORS.get(entry.engine)
+    if factory is None:
+        raise EngineNotConfigured()
+    try:
+        return factory(settings)
+    except ResearchUnavailable as exc:  # the model's keys are missing
+        raise EngineNotConfigured() from exc
 
 
 def _query(target: ResearchTarget) -> str:

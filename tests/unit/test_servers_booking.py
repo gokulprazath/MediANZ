@@ -54,6 +54,29 @@ async def test_unavailable_slot_is_refused() -> None:
     assert "no longer available" in proposed["error"]
 
 
+async def test_a_slot_held_by_another_patient_is_unavailable_until_the_hold_expires() -> None:
+    server, repo = _server()
+    day = (datetime.now(UTC) + timedelta(days=2) + timedelta(hours=10)).date().isoformat()
+    async with running(server) as transport:
+        async with mcp_session(transport, server, user_headers(OLIVIA_AUTH_USER)) as s:
+            held = await call(s, "hold_slot", slot_id=str(SAMPLE_SLOT))
+            renewed = await call(s, "hold_slot", slot_id=str(SAMPLE_SLOT))
+            own = await call(s, "propose_booking", slot_id=str(SAMPLE_SLOT))
+        async with mcp_session(transport, server, user_headers(JACK_AUTH_USER)) as s:
+            listed = await call(s, "get_available_slots", on_date=day)
+            taken = await call(s, "hold_slot", slot_id=str(SAMPLE_SLOT))
+            proposed = await call(s, "propose_booking", slot_id=str(SAMPLE_SLOT))
+            olivia, _ = repo.data.holds[SAMPLE_SLOT]
+            repo.data.holds[SAMPLE_SLOT] = (olivia, datetime.now(UTC) - timedelta(seconds=1))
+            after_expiry = await call(s, "hold_slot", slot_id=str(SAMPLE_SLOT))
+    assert "held_until" in held and "held_until" in renewed
+    assert own["status"] == "pending"
+    assert listed["slots"] == []  # like get_available_slots: a live hold hides the slot
+    assert "no longer available" in taken["error"]
+    assert "no longer available" in proposed["error"]
+    assert "held_until" in after_expiry
+
+
 async def test_cancel_and_reschedule_own_upcoming_appointment() -> None:
     server, _ = _server()
     async with session(server, user_headers(OLIVIA_AUTH_USER)) as s:

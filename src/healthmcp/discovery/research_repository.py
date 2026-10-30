@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from healthmcp.discovery.models import (
     AcceptanceExtraction,
@@ -391,3 +391,178 @@ class PgResearchRepository:
                 {"draft_id": draft_id, "reason": reason},
                 reference=False,
             )
+
+
+# ---------------------------------------------------------------------------
+# Fake (DATA_BACKEND=fake and unit tests). The plan_coverage targets mirror
+# seed/05: every combined or extras plan x (major_dental, general_dental, gp),
+# first run due tomorrow. The seed's target ids are random, so these are fixed
+# ids of the form a1000000-0000-4000-8000-0000000000<plan><category>.
+# ---------------------------------------------------------------------------
+_SEED_PLANS = {
+    UUID("21000000-0000-4000-8000-000000000002"): "Silver Plus Combined",
+    UUID("21000000-0000-4000-8000-000000000004"): "Basic Extras",
+    UUID("21000000-0000-4000-8000-000000000005"): "OSHC Essentials",
+    UUID("21000000-0000-4000-8000-000000000006"): "Visitor Standard",
+}
+_SEED_CATEGORIES = ("major_dental", "general_dental", "gp")
+
+
+def sample_research_targets() -> list[ResearchTarget]:
+    return [
+        ResearchTarget(
+            id=UUID(f"a1000000-0000-4000-8000-0000000000{str(plan_id)[-1]}{n}"),
+            target_type="plan_coverage",
+            plan_id=plan_id,
+            insurance_category=category,
+            url="https://www.privatehealth.gov.au/",
+            source_type=SourceType.PRIVATEHEALTH,
+            priority=100,
+            plan_name=plan_name,
+        )
+        for plan_id, plan_name in _SEED_PLANS.items()
+        for n, category in enumerate(_SEED_CATEGORIES, start=1)
+    ]
+
+
+class FakeResearchRepository:
+    def __init__(self, targets: list[ResearchTarget] | None = None) -> None:
+        self.targets = targets if targets is not None else sample_research_targets()
+        tomorrow = datetime.now(UTC) + timedelta(days=1)
+        self.next_run_at: dict[UUID, datetime] = {t.id: tomorrow for t in self.targets}
+        self.target_status: dict[UUID, tuple[str, str | None]] = {}
+        self.runs: dict[UUID, dict[str, Any]] = {}
+        self.drafts: dict[UUID, ResearchDraftSummary] = {}
+
+    async def list_targets(
+        self,
+        ctx: Context,
+        *,
+        plan_ids: Sequence[UUID],
+        insurance_category: str | None,
+        limit: int,
+    ) -> list[ResearchTarget]:
+        now = datetime.now(UTC)
+        found = [
+            t
+            for t in self.targets
+            if (plan_ids and t.plan_id in plan_ids)
+            or (not plan_ids and self.next_run_at[t.id] <= now)
+        ]
+        found = [
+            t
+            for t in found
+            if insurance_category is None or t.insurance_category == insurance_category
+        ]
+        found.sort(key=lambda t: (-t.priority, self.next_run_at[t.id], str(t.id)))
+        return found[:limit]
+
+    async def start_run(
+        self, ctx: Context, *, target: ResearchTarget, source_url: str | None
+    ) -> UUID:
+        run_id = uuid4()
+        self.runs[run_id] = {"target_id": target.id, "job_id": ctx.job_id, "status": "running"}
+        return run_id
+
+    async def finish_run(
+        self,
+        ctx: Context,
+        *,
+        run_id: UUID,
+        status: str,
+        pages_fetched: int,
+        drafts_created: int,
+        errors: int,
+        notes: Sequence[str],
+        source_url: str | None,
+    ) -> None:
+        self.runs[run_id].update(
+            status=status, pages_fetched=pages_fetched, drafts_created=drafts_created, errors=errors
+        )
+
+    async def mark_target(
+        self,
+        ctx: Context,
+        *,
+        target_id: UUID,
+        status: str,
+        error: str | None,
+        next_run_at: datetime,
+    ) -> None:
+        self.target_status[target_id] = (status, error)
+        self.next_run_at[target_id] = next_run_at
+
+    def _save(self, target: ResearchTarget, **fields: Any) -> UUID:
+        draft_id = uuid4()
+        self.drafts[draft_id] = ResearchDraftSummary(
+            id=draft_id,
+            status="pending",
+            plan_id=target.plan_id,
+            facility_id=target.facility_id,
+            insurer_provider_id=target.insurer_provider_id,
+            service_id=target.service_id,
+            insurance_category=target.insurance_category,
+            source_type=target.source_type,
+            created_at=datetime.now(UTC),
+            **fields,
+        )
+        return draft_id
+
+    async def create_coverage_draft(
+        self,
+        ctx: Context,
+        *,
+        run_id: UUID,
+        target: ResearchTarget,
+        extraction: CoverageExtraction,
+        source_url: str,
+        content_hash: str,
+    ) -> UUID:
+        return self._save(
+            target,
+            kind="coverage",
+            coverage_status=extraction.coverage_status,
+            source_url=source_url,
+            evidence_quote=extraction.evidence_quote,
+            confidence=extraction.confidence,
+        )
+
+    async def create_acceptance_draft(
+        self,
+        ctx: Context,
+        *,
+        run_id: UUID,
+        target: ResearchTarget,
+        extraction: AcceptanceExtraction,
+        source_url: str,
+        content_hash: str,
+    ) -> UUID:
+        return self._save(
+            target,
+            kind="acceptance",
+            accepted=extraction.accepted,
+            claim_mode=extraction.claim_mode,
+            source_url=source_url,
+            evidence_quote=extraction.evidence_quote,
+            confidence=extraction.confidence,
+        )
+
+    async def list_drafts(
+        self, ctx: Context, *, status: str | None, limit: int
+    ) -> list[ResearchDraftSummary]:
+        found = [d for d in self.drafts.values() if status is None or d.status == status]
+        found.sort(key=lambda d: (d.created_at, str(d.id)), reverse=True)
+        return found[:limit]
+
+    async def approve_draft(self, ctx: Context, *, draft_id: UUID, valid_from: date) -> UUID:
+        draft = self.drafts.get(draft_id)
+        if draft is None or draft.status != "pending":
+            raise LookupError("research draft not found")
+        self.drafts[draft_id] = draft.model_copy(update={"status": "approved"})
+        return uuid4()
+
+    async def reject_draft(self, ctx: Context, *, draft_id: UUID, reason: str | None) -> None:
+        draft = self.drafts.get(draft_id)
+        if draft is None or draft.status != "pending":
+            raise LookupError("research draft not found")
+        self.drafts[draft_id] = draft.model_copy(update={"status": "rejected"})

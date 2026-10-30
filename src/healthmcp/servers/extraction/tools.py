@@ -34,6 +34,7 @@ from healthmcp.shared.errors import HealthMcpError, InvalidRequest, NotFound, Sc
 from healthmcp.shared.guards import UntrustedText, untrusted
 from healthmcp.shared.logging import log_decision, sha256_hex
 from healthmcp.shared.server import HealthServer
+from healthmcp.shared.tool_catalog import GP_QUERY_SCOPE
 
 NAME = "extraction"
 
@@ -312,8 +313,10 @@ def register(server: HealthServer, repo: ClinicalRepository | None = None) -> No
 
         Context facts must belong to the same patient. Retrying with the same
         idempotency_key returns the existing query. It cannot answer queries.
+        The job token must carry the gp_query:create scope.
         """
         ctx = current_context()
+        ctx.require_scope(GP_QUERY_SCOPE)
         ctx.require_appointment()
         facts = await known_facts(context_fact_ids or [])
         saved = await clinical.save_gp_query(

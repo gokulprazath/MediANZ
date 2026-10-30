@@ -19,10 +19,18 @@ from healthmcp.discovery.models import (
     ResearchTarget,
     SourceType,
 )
-from healthmcp.discovery.research import ResearchWorker
+from healthmcp.discovery.research import (
+    MockResearchExtractor,
+    OpenAIResearchExtractor,
+    ResearchWorker,
+    research_extractor,
+)
 from healthmcp.shared.context import Context
 from healthmcp.shared.engines.models import EngineInfo, ExtractedPage, SearchResult
+from healthmcp.shared.errors import EngineNotConfigured
 from healthmcp.shared.guards import DomainAllowlist
+from healthmcp.shared.repositories.model_registry import EngineEntry
+from tests.conftest import make_settings
 
 TARGET = ResearchTarget(
     id=UUID("a0000000-0000-4000-8000-000000000001"),
@@ -292,3 +300,61 @@ async def test_fallback_sources_are_only_used_when_enabled() -> None:
 
     assert allowed.status == "ok"
     assert repository.coverage_drafts[0]["target"].source_type is SourceType.INSURER_SITE
+
+
+SILVER_PAGE = (
+    "Silver Plus Combined includes joint replacements, heart and vascular, cataracts and "
+    "dental surgery. Excludes pregnancy and birth and weight loss surgery. Restricted cover "
+    "for psychiatric services."
+)
+
+
+@pytest.mark.asyncio
+async def test_mock_research_extractor_quotes_an_exact_sentence() -> None:
+    extractor = MockResearchExtractor()
+
+    dental = await extractor.coverage(text=SILVER_PAGE, context="Silver Plus dental coverage")
+    pregnancy = await extractor.coverage(text=SILVER_PAGE, context="pregnancy birth coverage")
+    psych = await extractor.coverage(text=SILVER_PAGE, context="psychiatric services cover")
+    accepted = await extractor.acceptance(
+        text="Opening hours vary. Kedron Dental accepts Sunstate members with HICAPS on the spot.",
+        context="Kedron Dental Sunstate HICAPS direct billing",
+    )
+
+    assert dental.coverage_status is CoverageStatus.COVERED
+    assert pregnancy.coverage_status is CoverageStatus.NOT_COVERED
+    assert psych.coverage_status is CoverageStatus.PARTIALLY_COVERED
+    for result in (dental, pregnancy, psych):
+        assert result.evidence_quote in SILVER_PAGE  # the worker re-checks this
+        assert result.confidence == 0.5
+    assert accepted.accepted is True and accepted.claim_mode is ClaimMode.DIRECT
+
+
+def _entry(engine: str) -> EngineEntry:
+    return EngineEntry(
+        engine=engine,
+        capability="extraction",
+        provider="test",
+        model="m",
+        model_version="1",
+        region=None,
+        zero_data_retention=False,
+        allow_health_data=False,
+        enabled=True,
+    )
+
+
+def test_research_extractor_follows_the_enabled_engine_without_fallback() -> None:
+    settings = make_settings(
+        slm_base_url="https://slm.example.test/v1", slm_api_key="k", slm_model="m"
+    )
+    unconfigured = make_settings(slm_base_url="", slm_model="", agent_llm_model="")
+
+    assert isinstance(
+        research_extractor(_entry("mock_extraction"), settings), MockResearchExtractor
+    )
+    assert isinstance(research_extractor(_entry("slm"), settings), OpenAIResearchExtractor)
+    with pytest.raises(EngineNotConfigured):
+        research_extractor(_entry("slm"), unconfigured)  # keys missing: no mock fallback
+    with pytest.raises(EngineNotConfigured):
+        research_extractor(_entry("jev"), settings)

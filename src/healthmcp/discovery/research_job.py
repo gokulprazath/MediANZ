@@ -14,7 +14,7 @@ import sys
 import uuid
 
 from healthmcp.discovery.models import ResearchRefreshRequest, ResearchRunSummary
-from healthmcp.discovery.research import OpenAIResearchExtractor, ResearchWorker
+from healthmcp.discovery.research import ResearchWorker, research_extractor
 from healthmcp.discovery.research_repository import PgResearchRepository
 from healthmcp.shared.config import Settings, load_settings
 from healthmcp.shared.context import Context
@@ -36,10 +36,12 @@ async def run(settings: Settings, request: ResearchRefreshRequest) -> ResearchRu
     try:
         registry = EngineRegistry(settings, PgModelRegistryRepository(database))
         search = (await registry.search()).engine
+        # The extractor follows the enabled extraction engine (slm or mock_extraction).
+        extractor = research_extractor(await registry.extraction_entry(health_data=False), settings)
         worker = ResearchWorker(
             PgResearchRepository(database),
             search,
-            OpenAIResearchExtractor(settings),
+            extractor,
             DomainAllowlist(settings.research_domains),
         )
         ctx = Context(

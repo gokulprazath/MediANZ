@@ -121,6 +121,11 @@ class EngineRegistry:
             Selected[DecisionEngine], await self._select("decision", health_data=health_data)
         )
 
+    async def extraction_entry(self, *, health_data: bool) -> EngineEntry:
+        """The enabled extraction entry, without building its engine. Used by callers
+        with their own implementation per engine (the insurance research extractor)."""
+        return await self._enabled("extraction", health_data=health_data)
+
     async def extraction(self, *, health_data: bool) -> Selected[ExtractionEngine]:
         return cast(
             Selected[ExtractionEngine], await self._select("extraction", health_data=health_data)

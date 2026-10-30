@@ -29,7 +29,6 @@ from healthmcp.shared.context import Context, current_context
 from healthmcp.shared.engines.models import TypedQuestion
 from healthmcp.shared.errors import (
     DomainNotAllowed,
-    EngineNotConfigured,
     HealthMcpError,
     NotFound,
     PersonalInformationDetected,
@@ -330,22 +329,34 @@ def register(
 
 
 def _default_refresher(server: HealthServer) -> CoverageRefresher:
-    """The discovery research worker (search -> SLM -> staff-reviewed draft)."""
+    """The discovery research worker (search -> extractor -> staff-reviewed draft).
+
+    The search engine and the extractor follow model_registry (mock_search and
+    mock_extraction work with no API keys); with DATA_BACKEND=fake the drafts go
+    to an in-memory repository.
+    """
+    from healthmcp.discovery.research import ResearchWorker, research_extractor
+    from healthmcp.discovery.research_repository import (
+        FakeResearchRepository,
+        PgResearchRepository,
+        ResearchRepository,
+    )
+
+    deps = server.deps
+    repo: ResearchRepository = (
+        PgResearchRepository(deps.db) if deps.db is not None else FakeResearchRepository()
+    )
 
     async def refresh(ctx: Context, plan_id: UUID) -> ResearchRunSummary:
-        db = server.deps.db
-        if db is None:
-            raise EngineNotConfigured()
-        from healthmcp.discovery.research import OpenAIResearchExtractor, ResearchWorker
-        from healthmcp.discovery.research_repository import PgResearchRepository
-
+        # Insurer pages are public text, not health data.
+        entry = await deps.engines.extraction_entry(health_data=False)
+        worker = ResearchWorker(
+            repo,
+            (await deps.engines.search()).engine,
+            research_extractor(entry, deps.settings),
+            deps.domains,
+        )
         try:
-            worker = ResearchWorker(
-                PgResearchRepository(db),
-                (await server.deps.engines.search()).engine,
-                OpenAIResearchExtractor(server.deps.settings),
-                server.deps.domains,
-            )
             return await worker.refresh(ctx, ResearchRefreshRequest(plan_ids=(plan_id,), limit=10))
         except DiscoveryError as exc:
             raise Blocked() from exc

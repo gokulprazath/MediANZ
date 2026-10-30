@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from importlib import import_module
 from typing import Any
 
@@ -14,12 +15,16 @@ from healthmcp.servers.matching.tools import register as register_matching
 from healthmcp.servers.web_research.repository import FakeReviewsRepository
 from healthmcp.servers.web_research.tools import looks_clinical, summarise
 from healthmcp.servers.web_research.tools import register as register_research
+from healthmcp.shared.repositories import fake_repositories
 from healthmcp.shared.repositories.fake_data import DR_RAO, JACK_AUTH_USER, OLIVIA_AUTH_USER
+from healthmcp.shared.repositories.model_registry import FakeModelRegistryRepository
 from healthmcp.shared.tool_catalog import SERVERS
+from tests.conftest import make_settings
 from tests.helpers import mcp_session, running
 from tests.unit.servers_helpers import audit, call, job_headers, make_server, session, user_headers
 
 KEDRON = uuid.UUID("30000000-0000-4000-8000-000000000003")
+SILVER_PLUS = uuid.UUID("21000000-0000-4000-8000-000000000002")
 
 
 @pytest.mark.parametrize("name", sorted(SERVERS))
@@ -173,6 +178,37 @@ async def test_review_refresh_leaves_out_clinical_reviews_and_stores_no_text() -
     assert "Long wait at admissions." not in saved.non_clinical_summary
     assert coverage["drafts_created"] == 1
     assert "not available yet" in phio["error"]
+
+
+RESEARCH_JOB = {"agent": "research-job", "appointment_id": None, "patient_id": None}
+
+
+async def test_plan_coverage_refresh_works_with_the_mock_engines() -> None:
+    # The real refresher, no API keys: mock_search fixtures + mock_extraction.
+    server = make_server("web_research", lambda s: register_research(s, FakeReviewsRepository()))
+    async with session(server, job_headers(**RESEARCH_JOB)) as s:
+        silver = await call(s, "refresh_plan_coverage", plan_id=str(SILVER_PLUS))
+        unknown = await call(s, "refresh_plan_coverage", plan_id=str(uuid.uuid4()))
+    assert silver["source"] == "mock_search" and silver["status"] == "ok"
+    assert silver["targets"] == 3 and silver["drafts_created"] == 3 and silver["errors"] == 0
+    assert unknown["targets"] == 0 and unknown["drafts_created"] == 0
+
+
+async def test_plan_coverage_refresh_never_falls_back_to_the_mock() -> None:
+    registry = FakeModelRegistryRepository()
+    registry.set("mock_extraction", enabled=False)
+    registry.set("slm", enabled=True)  # enabled, but no SLM / agent model keys
+    repos = replace(fake_repositories(), model_registry=registry)
+    settings = make_settings(slm_base_url="", slm_model="", agent_llm_model="")
+    server = make_server(
+        "web_research",
+        lambda s: register_research(s, FakeReviewsRepository()),
+        repos=repos,
+        settings=settings,
+    )
+    async with session(server, job_headers(**RESEARCH_JOB)) as s:
+        result = await call(s, "refresh_plan_coverage", plan_id=str(SILVER_PLUS))
+    assert "not configured" in result["error"]
 
 
 async def test_patients_cannot_run_background_research() -> None:

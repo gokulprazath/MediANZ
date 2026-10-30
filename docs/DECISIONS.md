@@ -215,3 +215,20 @@ New decisions are appended; old decisions are not silently rewritten.
   real file's structure before the parser is written.
 - `web_research` runs in both modes (the `insurance` agent searches in user mode); the
   two refresh tools and the PHIO import refuse outside job mode.
+
+### Fixes after the curl verification
+- `create_gp_query` requires the `gp_query:create` job-token scope from every caller.
+  `/chat/confirm` already mints it; a clinical-doc-agent job that may raise GP queries
+  must be minted with `--scope gp_query:create` (`make token ... SCOPE=gp_query:create`).
+- The research extractor follows the enabled `extraction` engine in `model_registry`
+  (`slm` -> `OpenAIResearchExtractor`, `mock_extraction` -> `MockResearchExtractor`);
+  any other engine, or `slm` without model keys, raises `EngineNotConfigured` with no
+  fallback. This applies to `refresh_plan_coverage` and `make research`.
+- `MockResearchExtractor` quotes the page sentence sharing the most words with the query
+  and sets the status from keywords, with a fixed confidence of 0.5. Its results are still
+  pending drafts for staff.
+- With `DATA_BACKEND=fake`, research drafts go to an in-memory `FakeResearchRepository`
+  whose plan_coverage targets mirror seed 05. The seed's target ids are random, so the
+  fake uses fixed ids `a1000000-0000-4000-8000-0000000000<plan><category>`.
+- The fake booking repository follows `hold_slot` / `get_available_slots`: a live hold
+  by another patient makes the slot unavailable until it expires, and the holder may renew.

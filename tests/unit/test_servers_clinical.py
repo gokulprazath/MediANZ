@@ -23,6 +23,8 @@ from healthmcp.shared.repositories.fake_data import (
 )
 from healthmcp.shared.repositories.model_registry import FakeModelRegistryRepository
 from healthmcp.shared.server import HealthServer
+from healthmcp.shared.tool_catalog import GP_QUERY_SCOPE
+from tests.helpers import mcp_session, running
 from tests.unit.servers_helpers import audit, call, job_headers, make_server, session
 
 SEG = {s.seq: str(s.id) for s in SAMPLE_SEGMENTS}
@@ -321,9 +323,29 @@ async def test_urgent_item_when_the_transcript_says_so() -> None:
     assert urgent["created"] is True and urgent["severity"] == 9
 
 
+async def test_gp_query_needs_the_gp_query_scope() -> None:
+    server, repo = _server("extraction", extraction)
+    async with running(server) as transport:
+        async with mcp_session(
+            transport, server, job_headers(agent="insights-writer", patient_id=None)
+        ) as s:
+            writer = await call(
+                s, "create_gp_query", question="Is my iron okay?", idempotency_key="gpq-00010"
+            )
+        async with mcp_session(transport, server, job_headers()) as s:
+            doc_agent = await call(
+                s, "create_gp_query", question="Is my iron okay?", idempotency_key="gpq-00011"
+            )
+    assert "outside this request's scope" in writer["error"]
+    assert "outside this request's scope" in doc_agent["error"]
+    assert repo.data.gp_queries == {}
+
+
 async def test_gp_query_and_preferences() -> None:
     server, repo = _server("extraction", extraction)
-    async with session(server, job_headers(agent="insights-writer", patient_id=None)) as s:
+    async with session(
+        server, job_headers(agent="insights-writer", patient_id=None, scope=[GP_QUERY_SCOPE])
+    ) as s:
         first = await call(
             s, "create_gp_query", question="Is my iron okay?", idempotency_key="gpq-00001"
         )

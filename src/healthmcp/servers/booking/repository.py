@@ -225,7 +225,8 @@ class FakeBookingData:
     slots: dict[UUID, BookableSlot] = field(default_factory=dict)
     appointments: dict[UUID, tuple[UUID, AppointmentBrief]] = field(default_factory=dict)
     proposals: dict[UUID, tuple[UUID, ProposalStatus]] = field(default_factory=dict)
-    holds: dict[UUID, UUID] = field(default_factory=dict)
+    # slot id -> (patient holding it, held_until)
+    holds: dict[UUID, tuple[UUID, datetime]] = field(default_factory=dict)
 
 
 def sample_booking(now: datetime | None = None) -> FakeBookingData:
@@ -258,8 +259,18 @@ def sample_booking(now: datetime | None = None) -> FakeBookingData:
 
 
 class FakeBookingRepository:
+    """Holds follow public.hold_slot / get_available_slots: a slot held by another
+    patient is unavailable until the hold expires; the holder may renew it."""
+
     def __init__(self, data: FakeBookingData | None = None) -> None:
         self.data = data or sample_booking()
+
+    def _held_by_other(self, slot_id: UUID, patient: UUID | None, now: datetime) -> bool:
+        hold = self.data.holds.get(slot_id)
+        return hold is not None and hold[1] > now and hold[0] != patient
+
+    def _bookable(self, s: BookableSlot, patient: UUID | None, now: datetime) -> bool:
+        return s.bookable and s.starts_at > now and not self._held_by_other(s.slot_id, patient, now)
 
     async def available_slots(
         self,
@@ -270,10 +281,13 @@ class FakeBookingRepository:
         clinician_id: UUID | None,
         clinician_type: ClinicianType | None,
     ) -> list[Slot]:
+        now = datetime.now(UTC)
         return [
             Slot.model_validate(s.model_dump(exclude={"bookable"}))
             for s in self.data.slots.values()
             if s.bookable
+            and s.starts_at > now
+            and not self._held_by_other(s.slot_id, None, now)  # any live hold hides it
             and s.local_start.date() == on_date
             and (facility_id is None or s.facility_id == facility_id)
             and (clinician_id is None or s.clinician_id == clinician_id)
@@ -281,14 +295,22 @@ class FakeBookingRepository:
         ]
 
     async def hold_slot(self, ctx: Context, slot_id: UUID) -> datetime:
+        patient = ctx.require_patient()
+        now = datetime.now(UTC)
         s = self.data.slots.get(slot_id)
-        if s is None or not s.bookable:
+        if s is None or not self._bookable(s, patient, now):
             raise SlotTaken()
-        self.data.holds[slot_id] = ctx.require_patient()
-        return datetime.now(UTC) + timedelta(minutes=5)
+        until = now + timedelta(minutes=5)
+        self.data.holds[slot_id] = (patient, until)
+        return until
 
     async def slot(self, ctx: Context, slot_id: UUID) -> BookableSlot | None:
-        return self.data.slots.get(slot_id)
+        s = self.data.slots.get(slot_id)
+        if s is None:
+            return None
+        return s.model_copy(
+            update={"bookable": self._bookable(s, ctx.patient_id, datetime.now(UTC))}
+        )
 
     async def appointment(self, ctx: Context, appointment_id: UUID) -> AppointmentBrief | None:
         found = self.data.appointments.get(appointment_id)

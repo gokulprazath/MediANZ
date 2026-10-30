@@ -13,6 +13,10 @@ Mode = Literal["user", "job"]
 
 LOG_NOTE = "log_note"
 
+# Job-token scope that create_gp_query requires (minted by the agent's /chat/confirm,
+# or with `mint_job_token.py --scope gp_query:create`).
+GP_QUERY_SCOPE = "gp_query:create"
+
 
 @dataclass(frozen=True)
 class ServerSpec:

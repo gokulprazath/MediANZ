@@ -54,7 +54,7 @@ from healthmcp.shared.auth import (
 from healthmcp.shared.config import Settings
 from healthmcp.shared.context import AgentAllowlist
 from healthmcp.shared.logging import configure_logging
-from healthmcp.shared.tool_catalog import Mode
+from healthmcp.shared.tool_catalog import GP_QUERY_SCOPE, Mode
 
 logger = logging.getLogger("healthmcp.agent")
 
@@ -768,7 +768,7 @@ class AgentService:
             agent_id=ROLE_INSIGHTS_WRITER,
             job_id=f"gp-query-{uuid.uuid4()}",
             appointment_id=appointment,
-            scope=("gp_query:create",),
+            scope=(GP_QUERY_SCOPE,),
             lifetime_seconds=120,
         )
         arguments = {

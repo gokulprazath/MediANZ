@@ -52,8 +52,9 @@ consult-worker:
 	uv run python -m healthmcp.consult_notes.worker $(ARGS)
 
 # Example: make token AGENT=clinical-doc-agent APPOINTMENT=60000000-0000-4000-8000-000000000002
+# create_gp_query also needs SCOPE=gp_query:create.
 token:
-	uv run python scripts/mint_job_token.py --agent $(AGENT) $(if $(APPOINTMENT),--appointment $(APPOINTMENT))
+	uv run python scripts/mint_job_token.py --agent $(AGENT) $(if $(APPOINTMENT),--appointment $(APPOINTMENT)) $(if $(SCOPE),--scope $(SCOPE))
 
 db-reset:
 	@echo "Not available: the hosted database is never reset. New SQL goes in new files under"
