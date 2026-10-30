@@ -42,4 +42,53 @@ One line per assumption. Spec: `docs/FRONTEND_SPEC_A_NOW.md`.
 - Clinic list "rating" sort uses the clinicians' averages weighted by rating count.
 
 ## Recording
-- Plan (not built yet): one recording file if the consult is 15 min or less; if it reaches 15 min, that file is sent as seq 1 and the recorder then restarts every 5 min (seq 2, 3, …). Failed chunks retry with the same seq; blobs stay in memory only.
+- One recording file if the consult is 15 min or less; if it reaches 15 min, that file is sent as seq 1 and the recorder then restarts every 5 min (seq 2, 3, …). Each file comes from its own `MediaRecorder`, so every chunk is a complete file. Logic is in `features/consult/chunked-recorder.ts` (no React, unit-tested with a fake clock).
+- A failed chunk is retried with the same seq after 2, 4, 8 and 16 s; then the page shows "Retry sending" (same seq again) or Cancel. Blobs stay in page memory only until their upload succeeds.
+- Audio format: the first of `audio/webm;codecs=opus`, `audio/ogg;codecs=opus`, `audio/mp4`, `audio/webm` the browser supports (Safari records mp4).
+- Consent panel and recording controls are one shared component, `features/consult/consult-panel.tsx`, used by the patient's appointment-day page and the clinician's consult view.
+- Only one device records: if a `recording_sessions` row is `started` by another user, the panel says "Recording on the clinician's (patient's) device" instead of Record.
+- A `started` session by the same user with no recorder on this page (page closed mid-recording) is shown as "interrupted", with a Discard button (`cancel`).
+- Leaving the page while recording stops the microphone and sends `cancel` (best effort); the browser also asks before unloading.
+- If polling shows the other person's consent was withdrawn while recording, the recorder stops locally at once (the server deletes everything anyway).
+- Withdrawing consent asks for confirmation and sends no reason (`withdraw_recording_consent(id, null)`).
+- The recording indicator says "Recording" once (live region); the running time is a `role="timer"` that is not announced every second.
+- The patient's consent panel shows while the visit is checked in or in consultation; the clinician's also shows while booked/confirmed (so they can agree early). Recording itself needs checked in or in consultation (the RPC's rule).
+- Transcript speaker labels: segments are `c<seq>:<speaker>` and diarisation is per chunk, so speakers are numbered per part ("Speaker 1 (part 2)") and not matched across parts. Without segments the whole `transcript_text` is shown.
+- Rejecting a transcript returns the patient to "My recordings and transcripts"; the draft is gone.
+
+## Appointment day, consult and feedback
+- Appointment-day and consult pages poll the appointment every 5 s (`useLiveQuery`), consents and recording sessions every 5 s too.
+- "Complete consultation" asks for confirmation and reminds the clinician to stop recording first; the patient's panel unmounts when the visit completes, which cancels an unfinished recording on the patient's device.
+- Clinician consult view shows "latest vitals" as the newest row of `visit_vitals_latest` for the patient, plus all `visit_vitals` rows of this visit; vitals can be added once checked in (also after completion, for late entries; the trigger decides).
+- "Past visits with you" = the patient's earlier appointments with this clinician (any status), newest first, with reason, notes and fees.
+- Clinician notes have no wording about who else can read them: staff can read appointment rows in Part A.
+- Mark no-show (clinician) is offered for booked/confirmed visits whose start time has passed, as at the front desk.
+- Feedback: optional sub-ratings can't be cleared once picked (star radio group); "would recommend" has Yes / No / Prefer not to say (null).
+- Feedback is editable while `created_at` is within 30 days (the RLS rule); after that the page says so. "Anonymous" hides the name from the clinician only; the help text says staff can still see it.
+
+## Staff visits, claims and moderation
+- `FeesForm` (`features/appointments/fees-form.tsx`) is shared by staff visit detail and the clinician consult view. Gap follows fee − rebate (never below 0) until the user edits it; a saved gap that differs counts as edited.
+- New claims default the amount to the visit's gap; status defaults to draft. Rejection reason is shown and saved only when status is Rejected (cleared otherwise).
+- The "no policy on the visit date" trigger error is shown inline in the claim form and as a toast.
+- Staff rating moderation lists ratings whose appointment is at the chosen clinic; the page says "never for being negative". Hidden and flagged both leave the star averages (the summary RPC counts only visible).
+- `MODERATION_LABEL` lives in `lib/format.ts` (Next.js page files may only export page fields).
+
+## Clinician portal
+- Clinician screens use the time zone of their first current affiliation's clinic (`features/clinician/home-clinic.ts`); the calendar is in that zone, with the zone named when it differs from the browser's.
+- Calendar: FullCalendar v7 classic theme, `en-au` locale, day view by default, 7 am to 8 pm in week/day views; rescheduled rows are left out (the new booking is shown); event text includes the status, so colour is not the only cue; a legend is shown. The "Today" button's accessible name is set to "Today" to match its text.
+- My leave reuses `ExceptionsPanel` with only the clinician's own row and their affiliated clinics; extra sessions are not offered to clinicians (spec 5.4 says leave).
+
+## Auth (fix)
+- After a successful MFA code the app does a full page load to `next`: the client router had cached the pre-MFA redirect for that path and sent the user back to `/mfa`.
+
+## Privacy page
+- `/privacy` is a server page with the v1 consent wording from `config/consent.ts`, plus how health data, location and rating comments are handled and a "no medical advice" note with 000 and Lifeline.
+
+## Tests
+- Unit tests (`tests/unit`, Vitest, jsdom, TZ Australia/Brisbane) use the mock store directly with a fixed "now" (Friday 30 Oct 2026, 11 am Brisbane).
+- E2E (`tests/e2e`, Playwright, Chromium only) run one at a time against `next dev` on port 3100 in mock mode; each test resets the mock database. `PW_CHROMIUM_PATH` lets the suite use a preinstalled Chromium when it differs from Playwright's pinned build.
+- E2E consent/recording uses appointment `…0103` (Priya with Dr Williams, no seeded consent); the withdrawal test uses `…0101`, where the seed has Olivia's consent already (as `03_*.sql` does).
+- axe runs with WCAG 2.0/2.1/2.2 A and AA tags; the suite fails on any serious or critical violation.
+
+## Part B (needs backend work, not built)
+- None found in this round: every Phase 4–7 screen works with the existing tables, RLS, RPCs and the Edge Function.
