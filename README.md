@@ -1,6 +1,12 @@
-# Health booking app
+# MediANZ: health booking app
 
-**Live app:** https://medianz.vercel.app
+**Live app:** https://medianz.vercel.app · **License:** [MIT](LICENSE)
+
+Patients find and book care with AI (costs after Medicare and insurance), ask an AI
+assistant about their own approved record, and record consults with consent;
+clinicians review AI-drafted notes; reception runs the front desk. The language
+models are **NVIDIA Nemotron** served by **Nebius Token Factory**
+([details below](#nvidia-nemotron-on-nebius-token-factory)).
 
 For evaluators: open https://medianz.vercel.app/login?demo and choose **Patient**
 (Olivia Brown), **Clinician** (Dr Asha Rao) or **Receptionist** (Southbank front
@@ -12,30 +18,132 @@ internal Python service `backend` and the consult-notes daemon `consult-worker`,
 with Supabase for the database, sign-in and transcription. Deployment steps are in
 [web/README.md](web/README.md#deploying-to-vercel).
 
+## Setup
+
+### Prerequisites
+- Python 3.12 and [uv](https://docs.astral.sh/uv/); Node.js 20.9 or later with npm
+  (tested with Node 24).
+- For live mode: a Supabase project, a Nebius Token Factory API key, a Jev (TypeSafe)
+  key for the decision engine and an ElevenLabs key for speech-to-text. Optional:
+  Tavily (insurance research), Google Maps and Places keys, Docker (worker image).
+
+### 1. Try it without any accounts (mock mode)
+```bash
+git clone https://github.com/gokulprazath/MediANZ.git
+cd MediANZ/web
+npm ci
+npm run dev        # open http://localhost:3000/login?demo
+```
+Mock mode keeps sample data in memory and answers with deterministic stand-in agents:
+no keys and no database. Pick Patient, Clinician or Receptionist on the Demo account tab
+(or sign in with the accounts listed on the login page: password `medianz-demo`, then
+the authenticator code `123456` for clinicians and staff).
+
+### 2. Live mode on your machine
+1. **Supabase:** run the SQL files below in order (SQL Editor), create the test logins
+   and run `seed/02_link_test_logins.sql`, then deploy the `transcribe-consult` Edge
+   Function with its `ELEVENLABS_API_KEY` secret ([Edge Function](#edge-function)).
+2. **Python services:**
+   ```bash
+   uv sync
+   cp .env.example .env   # then fill it in (comments in the file)
+   ```
+   Key settings: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_JWT_SECRET`,
+   `DATABASE_URL` (the Session pooler URI), `JOB_TOKEN_SECRET` (at least 32 bytes:
+   `openssl rand -base64 48`), `SLM_BASE_URL=https://api.tokenfactory.nebius.com/v1/`,
+   `SLM_API_KEY`, `SLM_MODEL=nvidia/nemotron-3-super-120b-a12b`, `JEV_API_KEY`.
+   Then start each in its own terminal:
+   ```bash
+   make servers                                              # the 7 MCP servers (3101-3107)
+   make gateway                                              # MCP gateway (3100)
+   make agent                                                # agent service (3108)
+   uv run uvicorn healthmcp.discovery.app:app --port 3109    # discovery API
+   make consult-worker                                       # consult-notes worker
+   ```
+3. **Web app:**
+   ```bash
+   cd web
+   cp .env.example .env.local
+   # NEXT_PUBLIC_DATA_MODE=live, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+   # AGENT_SERVICE_URL=http://localhost:3108, DISCOVERY_SERVICE_URL=http://localhost:3109
+   npm run dev
+   ```
+
+### 3. Tests
+```bash
+make test                 # Python, fully offline
+make lint                 # ruff, format check, mypy
+make test-integration     # against the development database, each test rolled back
+cd web && npm test && npm run typecheck && npm run test:e2e   # web unit + Playwright (mock mode)
+```
+
+### 4. Deploy
+One Vercel project runs the web app, the Python backend and the worker: see
+[web/README.md](web/README.md#deploying-to-vercel).
+
+## NVIDIA Nemotron on Nebius Token Factory
+
+Every language-model call in MediANZ goes to an **NVIDIA Nemotron** open model on
+**Nebius Token Factory** (OpenAI-compatible API, `https://api.tokenfactory.nebius.com/v1/`).
+The default is `nvidia/nemotron-3-super-120b-a12b`; we also ran
+`nvidia/Nemotron-3_5-Lightning` live and compared the two.
+
+### Where Nemotron is used
+| Feature | What Nemotron does | Code |
+| --- | --- | --- |
+| Consult notes | After the patient approves a transcript, drafts clinical facts (medicines, symptoms, observations, follow-ups) as JSON-schema output, each tied to a quote and segment of the transcript and checked before it is saved. A clinician approves every fact. | `src/healthmcp/shared/engines/extraction.py`, `src/healthmcp/consult_notes/` |
+| Key-point second opinion | Answers when the decision engine (Jev) is below 0.6 confidence, and the free-text "explain" questions; the clinician still approves. | `src/healthmcp/shared/engines/decision.py` (`SlmDecisionEngine`) |
+| Patient AI assistant | LangGraph agents for records, insurance, fees and booking use Nemotron with tool calling through the MCP gateway, limited to the signed-in patient's data. Questions it can't answer become a GP question the patient approves. | `src/healthmcp/agent.py` |
+| Insurance research | Extracts plan coverage from allowlisted public pages into drafts that staff approve. | `src/healthmcp/discovery/research.py` |
+
+### Where Token Factory sped up our work
+These figures were measured while running the app live:
+- **One OpenAI-compatible endpoint for every feature.** The same `openai` and
+  `langchain-openai` clients serve extraction, decisions, agents and research. Changing
+  the model is one setting (`SLM_MODEL`), so we compared two Nemotron models on live
+  traffic without code changes.
+- **Structured outputs and tool calling.** `response_format: json_schema` returns facts
+  and answers in our schema, which are validated before anything is saved. Tool calling
+  drives the four patient agents.
+- **Reasoning control.** Turning off Nemotron's reasoning
+  (`chat_template_kwargs: {"enable_thinking": false}`, setting `SLM_DISABLE_THINKING`)
+  cut a 20-segment extraction from 28.5 s and 6,163 reasoning tokens to about 1.5 s and
+  98 tokens. A whole consult-notes run (facts and key points) then finished in 11 s.
+- **Picking the model by latency.** With 8 concurrent calls, Nemotron 3 Super answered
+  in about 1 s each. The serverless Lightning model ranged from about 1 s to 85 s
+  depending on load, so Super is the default and the per-call timeout is a setting
+  (`SLM_TIMEOUT_SECONDS`).
+- **Model registry.** Each engine is recorded in `model_registry` with its provider
+  ("Nebius Token Factory", `seed/06_nebius_engines.sql`) and whether it may receive
+  health data. Confirm the region and data-retention terms before production.
+
+### Other Nebius tools or services
+Token Factory (model inference) is the only Nebius service MediANZ uses. The other
+parts are: hosting on Vercel; database, sign-in and the transcription function on
+Supabase; speech-to-text with ElevenLabs Scribe; and the decision engine Jev (TypeSafe).
+
 ## Repository structure
 
 ```
 MediANZ/
-├── README.md
-├── .env                                  # your secrets (never commit; see docs/MCP_BUILD_SPEC.md §11)
-├── docs/
-│   └── MCP_BUILD_SPEC.md                 # build spec for the Python MCP servers (give to Claude Code)
-└── supabase/
-    ├── migrations/                       # schema changes, run in filename order
-    │   ├── 20261026000000_health_booking_schema.sql
-    │   ├── 20261026010000_security_advisor_fixes.sql
-    │   └── 20261026020000_visit_vitals.sql
-    ├── seed/                             # sample data (development/test projects only)
-    │   ├── 01_sample_data.sql
-    │   ├── 02_link_test_logins.sql
-    │   └── 03_sample_vitals.sql
-    └── functions/
-        └── transcribe-consult/
-            └── index.ts                  # Edge Function: transcribes audio in memory, never stores it
+├── LICENSE                  # MIT
+├── vercel.json              # Vercel: web and backend services, consult-worker daemon
+├── vercel_backend.py        # entrypoint of the Vercel backend service
+├── Dockerfile.worker        # consult-notes worker image (Vercel daemon)
+├── pyproject.toml, uv.lock  # Python 3.12 project (uv)
+├── Makefile                 # run the services, the worker and the tests
+├── .env.example             # every setting, with comments (copy to .env; never commit .env)
+├── config/agents.json       # which agent may use which MCP tools
+├── src/healthmcp/           # 7 MCP servers, gateway, agent service, discovery API, consult worker
+├── tests/                   # Python unit, database and integration tests
+├── web/                     # Next.js app: patient, clinician and staff portals
+├── supabase/
+│   ├── migrations/          # schema changes, run in filename order
+│   ├── seed/                # sample data (development projects only)
+│   └── functions/transcribe-consult/   # Edge Function: transcribes audio in memory, never stores it
+└── docs/                    # build spec and decision logs
 ```
 
-The Python MCP servers (`pyproject.toml`, `src/healthmcp/`, `tests/`, …) are
-added at the top level by Claude Code, following `docs/MCP_BUILD_SPEC.md`.
 The repository is the record of every SQL file you have run in the dashboard;
 new files are always added with a later date, never by editing old ones.
 
@@ -60,9 +168,11 @@ Skip any you have already run.
 | 12 | `migrations/20261028000000_consult_key_points.sql` | Consult notes: processing queue (`consult_note_runs`, queued when a transcript is approved, published to Realtime), draft key points from the decision engine, review functions, deletion cascade |
 | 13 | `migrations/20261028010000_key_point_second_opinion.sql` | Key points: SLM second opinion when Jev is below 0.6, `explain` question kind (free-text answers), `edit_and_approve_key_point_text` |
 | 14 | `seed/06_nebius_engines.sql` | Development only: Nebius Token Factory as the SLM and Jev as the decision engine (both allow health data), sample explain questions |
-| 15 | `migrations/20261030000000_partb_live_agents.sql` | Web app Part B: Realtime for appointments, consents, recording sessions and GP queries; `patient_check_in`; patients read their own GP questions; staff-only `get_agent_activity` / `get_engine_activity`. Run after every earlier migration, including `20261028100000_chunked_transcription.sql`. |
+| 15 | `migrations/20261028100000_chunked_transcription.sql` | Chunked transcription for the `transcribe-consult` Edge Function (temporary text per chunk, joined into one draft). Recording fails without it. |
+| 16 | `migrations/20261030000000_partb_live_agents.sql` | Web app Part B: Realtime for appointments, consents, recording sessions and GP queries; `patient_check_in`; patients read their own GP questions; staff-only `get_agent_activity` / `get_engine_activity`. |
+| 17 | `seed/07_olivia_demo_data.sql` | Demo data for Olivia: more history, an approved transcript, an answered question, a review in two weeks and a visit checked in now (re-run before a demo for a fresh one) |
 
-Files 4–6, 9 and 14 are sample data or development settings: use them only in a
+Files 4–6, 9, 14 and 17 are sample data or development settings: use them only in a
 development project, never in the project that will hold real patients.
 
 ## MCP servers (Python, work in progress)
@@ -164,12 +274,11 @@ them; the patient request path never invokes web search.
 
 Edge Functions → Deploy a new function → Via Editor → name it
 `transcribe-consult` → paste `supabase/functions/transcribe-consult/index.ts`
-→ Deploy (keep "Verify JWT" on). Then add the `STT_API_URL`, `STT_API_KEY` and
-`STT_MODEL` secrets under Edge Functions → Secrets. `STT_API_URL` is an
-OpenAI-compatible `/v1/audio/transcriptions` endpoint (Nebius Token Factory or
-another provider). Set `CORS_ALLOWED_ORIGIN` to the web app's origin
-(comma-separated for several); without it any origin may call the function
-(it still needs a signed-in user).
+→ Deploy (keep "Verify JWT" on). Then add the `ELEVENLABS_API_KEY` secret under
+Edge Functions → Secrets (optional: `ELEVENLABS_STT_MODEL`, default `scribe_v2`;
+`ELEVENLABS_LANGUAGE`, default `en`; `ELEVENLABS_KEYTERMS`). Speech-to-text is
+ElevenLabs Scribe; the audio is transcribed in memory and never stored. Any origin
+may call the function, but every call needs a signed-in user's token.
 
 ## Consult notes
 
@@ -189,7 +298,7 @@ talking only to Supabase:
    make consult-worker ARGS=--once  # drain the queue, then exit
    ```
 
-   The SLM (engine `slm`, e.g. Nebius) writes draft `clinical_facts` for every
+   The SLM (engine `slm`: NVIDIA Nemotron on Nebius Token Factory) writes draft `clinical_facts` for every
    active `clinical_fields` entry. The decision engine (Jev, through
    `typesafe_sdk`; `mock_decision` without seed 06) answers every active yes/no,
    choice and score `decision_questions` entry, with the questions built from
@@ -214,3 +323,7 @@ With `LOG_DIR=logs`, each service also writes `logs/<service>.log` (git-ignored)
 | `health-app` (production) | Real patients | **No**: migrations 1–3 only |
 
 Claude Code only ever connects to the development project.
+
+## License
+
+MediANZ is released under the [MIT License](LICENSE).

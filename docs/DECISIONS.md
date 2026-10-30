@@ -88,8 +88,8 @@ New decisions are appended; old decisions are not silently rewritten.
 - Consults are recorded only after both parties consent with wording `v2` (covers AI
   analysis). The audio is transcribed in memory by the `transcribe-consult` Edge Function
   and never stored.
-- Speech-to-text uses an OpenAI-compatible `/v1/audio/transcriptions` endpoint (Nebius
-  Token Factory in development). The provider is chosen only by Edge Function secrets.
+- Speech-to-text is ElevenLabs Scribe, called by the `transcribe-consult` Edge Function
+  (`ELEVENLABS_*` secrets). Nebius Token Factory serves the language models only.
 - Nothing is extracted until the patient approves the transcript. Approval queues a
   `consult_note_runs` row through a database trigger, so a missed client call can't skip
   processing.
@@ -155,8 +155,8 @@ New decisions are appended; old decisions are not silently rewritten.
 - The worker runs server-side with `DATABASE_URL`, in job mode, scoped to the claimed
   appointment. Queue functions are granted to `service_role` only. `consult_note_runs`
   carries status, counts and an error code only, so it is safe to publish to Realtime.
-- `transcribe-consult` keeps "Verify JWT" on and restricts CORS to
-  `CORS_ALLOWED_ORIGIN` when it is set.
+- `transcribe-consult` keeps "Verify JWT" on; CORS allows any origin, and every call
+  still needs a signed-in user's token.
 - Before production, the Nebius hosting region, zero-data-retention terms and
   data-processing agreement must be confirmed. Until then, `allow_health_data` is enabled
   only in the development project (`seed/06_nebius_engines.sql`).
