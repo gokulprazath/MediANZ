@@ -88,6 +88,7 @@ export default function ClinicianCalendarPage() {
             timeZone={timeZone}
             initialView="timeGridDay"
             headerToolbar={{ start: "prev,next today", center: "title", end: "timeGridDay,timeGridWeek,dayGridMonth" }}
+            todayHint="Today"
             nowIndicator
             slotMinTime="07:00:00"
             slotMaxTime="20:00:00"

@@ -23,10 +23,12 @@ export default function BookingConfirmedPage() {
           <Card className="mx-auto max-w-xl">
             <CardHeader>
               <CardTitle>
-                <h1 className="flex items-center gap-2 text-xl" role="status">
-                  <CheckCircle2 className="size-6 text-success" aria-hidden="true" />
-                  You&apos;re booked in
-                </h1>
+                <div role="status">
+                  <h1 className="flex items-center gap-2 text-xl">
+                    <CheckCircle2 className="size-6 text-success" aria-hidden="true" />
+                    You&apos;re booked in
+                  </h1>
+                </div>
               </CardTitle>
             </CardHeader>
             <CardContent className="grid gap-4">

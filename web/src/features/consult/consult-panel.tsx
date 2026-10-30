@@ -186,12 +186,16 @@ function RecordingIndicator({ since }: { since: number }) {
     return () => clearInterval(t);
   }, []);
   return (
-    <div role="status" className="flex items-center gap-2 rounded-md bg-danger-soft px-3 py-2 font-semibold text-destructive">
+    <div className="flex items-center gap-2 rounded-md bg-danger-soft px-3 py-2 font-semibold text-destructive">
       <span className="relative flex size-3" aria-hidden="true">
         <span className="absolute inline-flex size-full animate-ping rounded-full bg-destructive opacity-60 motion-reduce:animate-none" />
         <span className="relative inline-flex size-3 rounded-full bg-destructive" />
       </span>
-      Recording <span className="font-normal tabular-nums">{formatCountdown(now - since)}</span>
+      {/* Announced once; the running time is not read out every second. */}
+      <span role="status">Recording</span>
+      <span role="timer" aria-live="off" aria-label="Time recorded" className="font-normal tabular-nums">
+        {formatCountdown(now - since)}
+      </span>
     </div>
   );
 }
@@ -319,8 +323,8 @@ export function ConsultPanel({
         )}
 
         <div className="flex flex-wrap gap-2">
-          {!mine ? (
-            <Button onClick={agree} disabled={busy || !consents.isSuccess}>
+          {!consents.isSuccess ? null : !mine ? (
+            <Button onClick={agree} disabled={busy}>
               {busy ? "Saving…" : "I agree to recording"}
             </Button>
           ) : (

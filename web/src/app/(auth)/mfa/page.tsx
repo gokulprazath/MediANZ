@@ -90,8 +90,8 @@ function MfaInner() {
             try {
               await getAuthClient().mfaVerify(factorId, code);
               markActive();
-              router.replace(next);
-              router.refresh();
+              // Full load: the client router may have cached the pre-MFA redirect for this path.
+              window.location.replace(next);
             } catch (err) {
               setError(friendlyError(err));
               form.reset({ code: "" });
