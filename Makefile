@@ -1,4 +1,6 @@
-.PHONY: sync test test-integration lint format typecheck gateway agent research consult-worker token db-reset
+.PHONY: sync test test-integration lint format typecheck server servers gateway agent research consult-worker token db-reset
+
+SERVERS := transcript decision extraction patient_record matching booking web_research
 
 sync:
 	uv sync
@@ -23,6 +25,16 @@ format:
 
 typecheck:
 	uv run mypy
+
+# One MCP server (ports 3101-3107). Example: make server NAME=booking
+server:
+	uv run python -m healthmcp.servers.$(NAME)
+
+# All seven MCP servers in the foreground; Ctrl+C stops them all.
+servers:
+	@trap 'kill 0' INT TERM; \
+	for s in $(SERVERS); do uv run python -m healthmcp.servers.$$s & done; \
+	wait
 
 gateway:
 	uv run python -m healthmcp.gateway

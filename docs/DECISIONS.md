@@ -165,3 +165,53 @@ New decisions are appended; old decisions are not silently rewritten.
 
 - With `LOG_DIR` set, each service also writes a rotating `logs/<service>.log` with the
   same redaction as console logs. The `logs/` folder is git-ignored apart from `.gitkeep`.
+
+## 2026-10-30 — The seven MCP servers
+
+### Structure
+
+- `src/healthmcp/servers/<name>/` has `tools.py` (`register(server, repo=None)`),
+  `__main__.py` and, where needed, `repository.py`. Tool handlers never write SQL: each
+  server has a repository Protocol with a Pg implementation (through `db.py`) and an
+  in-memory Fake. With `DATA_BACKEND=fake` the Fake is used, so every server runs and is
+  tested with no database or API keys.
+- `transcript`, `decision` and `extraction` share `servers/clinical.py` (job mode, every
+  query pinned to the token's appointment) and `servers/grounding.py`.
+- Existing code is reused: the consult-notes eligibility function, the engines and
+  registry, `find_gp_candidates`, `estimate_fees`, `get_available_slots`, `hold_slot`,
+  `get_clinician_rating_summary`, and the discovery `ResearchWorker` for
+  `refresh_plan_coverage`.
+
+### Assumptions
+
+- Date parameters are named `on_date` / `date_from` / `date_to` instead of the spec's
+  `date`, `from` and `to` (`from` is a Python keyword, and `date` would hide the type).
+- Every tool that reads transcript text first checks `get_processing_eligibility`.
+  `create_gp_query`, `list_open_items` and `get_clinician_preferences` do not read the
+  transcript and skip it (a GP query from the patient app may have no transcript).
+- `decision`: attribute and evidence questions are added per asked question, with ids
+  `<template>__<question>`, so they cannot be asked directly. Answers below
+  `DECISION_REVIEW_BELOW` (0.6) also get the SLM's opinion, as in the consult-notes
+  worker: the more confident answer is suggested, both are returned, and
+  `needs_gp_review` is true. `explain` questions go to the SLM directly.
+- `save_draft_fact` stores the server's grounding offsets and segment, not the agent's.
+  Duplicates are the same field and value in a draft that shares a segment.
+- `raise_open_item(kind="urgent")`: severity comes from `urgency_level` over the approved
+  transcript (levels 2 and 3 map to 6 and 9, as in the worker). If the engine does not
+  rate the consult urgent with enough confidence, the item is refused and the agent can
+  raise it as `missing_info`. The database trigger creates the clinic notification.
+- `find_gp_candidates`: postcodes come from a small local table of sample postcodes
+  (`servers/matching/postcodes.py`). Stored preferences apply unless overridden; the
+  distance limit applies only when a location is given. `applied` echoes the search.
+- `get_score_breakdown`: `patient_rating` and `wait_time` are the rating-based factors,
+  shown only with at least 5 visible ratings.
+- `refresh_facility_reviews`: reviews with clinical words are dropped in code, and the
+  rest are checked with the decision engine (`health_data=False`; public review text,
+  not patient data). The stored summary is a deterministic list of common themes, so no
+  review is quoted or stored.
+- `refresh_plan_coverage` creates staff-reviewed `research_drafts` through the existing
+  research worker (the newer pipeline) rather than draft `insurance_plan_versions`.
+- `import_phio_dataset` is registered but always refuses: spec 6.7 requires reviewing a
+  real file's structure before the parser is written.
+- `web_research` runs in both modes (the `insurance` agent searches in user mode); the
+  two refresh tools and the PHIO import refuse outside job mode.

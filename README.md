@@ -61,6 +61,31 @@ make lint              # ruff + mypy (strict)
 make test-integration  # database tests against the dev project (rolled back)
 ```
 
+The seven servers live in `src/healthmcp/servers/`:
+
+| Server | Port | Mode | Tools |
+|---|---|---|---|
+| `transcript` | 3101 | job | `get_processing_eligibility`, `get_transcript_windows`, `search_transcript`, `check_grounding` |
+| `decision` | 3102 | job | `decide_batch`, `decide_yes_no`, `decide_choice`, `decide_score` |
+| `extraction` | 3103 | job | `extract_value`, `save_draft_fact`, `raise_open_item`, `create_gp_query`, `list_open_items`, `get_clinician_preferences` |
+| `patient_record` | 3104 | both | `get_approved_facts`, `get_observations`, `get_eligibility`, `get_appointments` |
+| `matching` | 3105 | user | `get_patient_gp_preferences`, `find_gp_candidates`, `get_score_breakdown`, `get_fees`, `get_plan_coverage`, `get_facility_review_summary` |
+| `booking` | 3106 | user | `get_available_slots`, `hold_slot`, `propose_booking`, `propose_cancellation`, `propose_reschedule`, `get_proposal_status` |
+| `web_research` | 3107 | both | `web_search`, `web_extract`, `refresh_plan_coverage`, `refresh_facility_reviews`, `import_phio_dataset` |
+
+Every server also has `log_note`. Which agent may call which tool is set in
+`config/agents.json`.
+
+```
+make servers                  # all seven; Ctrl+C stops them
+make server NAME=booking      # or one: uv run python -m healthmcp.servers.booking
+DATA_BACKEND=fake make servers   # sample data in memory: no database or API keys
+```
+
+With `DATA_BACKEND=pg` (the default) the servers use `DATABASE_URL`. From WSL use the
+**Session pooler** connection string (IPv4), and URL-encode special characters in the
+password (`@` is `%40`).
+
 An agent can connect to the servers individually or use the optional gateway,
 which exposes all seven on `http://127.0.0.1:3100/mcp` with names such as
 `booking__get_available_slots`:
