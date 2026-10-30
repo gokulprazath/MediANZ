@@ -124,13 +124,15 @@ class GatewayConnection:
 class GatewayToolFactory:
     url: str
     timeout: float
+    # In-process gateway (healthmcp.backend on Vercel); None means over the network.
+    transport: httpx2.AsyncBaseTransport | None = None
 
     @asynccontextmanager
     async def open(self, token: str, agent_id: str) -> AsyncIterator[GatewayConnection]:
         headers = {"Authorization": f"Bearer {token}", "X-Agent-Id": agent_id}
         async with AsyncExitStack() as stack:
             http = await stack.enter_async_context(
-                httpx2.AsyncClient(headers=headers, timeout=self.timeout)
+                httpx2.AsyncClient(headers=headers, timeout=self.timeout, transport=self.transport)
             )
             read, write = await stack.enter_async_context(
                 streamable_http_client(self.url, http_client=http)

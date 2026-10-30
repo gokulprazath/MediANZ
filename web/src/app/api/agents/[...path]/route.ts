@@ -6,6 +6,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { ALLOWED_QUERY, resolveAgentRoute } from "@/lib/agents/routes";
+import { upstreamBase } from "@/lib/agents/upstream";
 import { IS_MOCK } from "@/lib/env";
 import { handleMockAgentRequest } from "@/lib/mock/agents";
 import { decodeMockSession, MOCK_SESSION_COOKIE } from "@/lib/mock/session";
@@ -14,11 +15,6 @@ import { getServerSupabase } from "@/lib/supabase/server";
 
 const MAX_BODY = 32 * 1024;
 const TIMEOUT_MS = 60_000;
-
-function upstreamBase(upstream: "agent" | "discovery"): string {
-  const url = upstream === "agent" ? process.env.AGENT_SERVICE_URL : process.env.DISCOVERY_SERVICE_URL;
-  return (url ?? "").replace(/\/+$/, "");
-}
 
 const json = (body: unknown, status: number) =>
   NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });

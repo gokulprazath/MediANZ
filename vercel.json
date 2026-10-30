@@ -1,0 +1,31 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["syd1"],
+  "services": {
+    "web": {
+      "root": "web",
+      "framework": "nextjs",
+      "bindings": [{ "type": "service", "service": "backend", "format": "url", "env": "BACKEND_URL" }]
+    },
+    "backend": {
+      "root": ".",
+      "framework": "fastapi",
+      "entrypoint": "vercel_backend:app",
+      "functions": {
+        "vercel_backend.py": {
+          "maxDuration": 300,
+          "excludeFiles": "{web/**,tests/**,supabase/**,docs/**,logs/**,scripts/**,venv/**,.venv/**,.mypy_cache/**,.pytest_cache/**,.ruff_cache/**}"
+        }
+      }
+    }
+  },
+  "daemons": {
+    "consult-worker": {
+      "root": ".",
+      "entrypoint": "Dockerfile.worker",
+      "instances": { "syd1": 1 },
+      "resources": { "requests": { "memory": "1Gi" } }
+    }
+  },
+  "rewrites": [{ "source": "/(.*)", "destination": { "service": "web" } }]
+}

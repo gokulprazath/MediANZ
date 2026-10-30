@@ -2,6 +2,7 @@
 // the offline stand-ins for the agent and discovery services.
 import { beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentRoute } from "@/lib/agents/routes";
+import { upstreamBase } from "@/lib/agents/upstream";
 import { readPendingAction } from "@/lib/agents/pending-action";
 import type { ChatResponse, DiscoveryResponse } from "@/lib/agents/types";
 import type { DataApi } from "@/lib/data/api";
@@ -116,6 +117,20 @@ describe("agent proxy allowlist", () => {
       "/v1/research/drafts/79000000-0000-4000-8000-000000000001/approve",
     );
     expect(resolveAgentRoute("POST", ["research", "drafts", "../../admin", "approve"])).toBeNull();
+  });
+});
+
+describe("proxy upstreams", () => {
+  it("uses the Vercel binding to the one backend service, else the two local services", () => {
+    const vercel = { BACKEND_URL: "https://backend.internal", AGENT_SERVICE_URL: "http://localhost:3108" };
+    expect(`${upstreamBase("agent", vercel)}/chat`).toBe("https://backend.internal/agent/chat");
+    expect(`${upstreamBase("discovery", { BACKEND_URL: "https://b.internal/x/" })}/v1/services`).toBe(
+      "https://b.internal/x/discovery/v1/services",
+    );
+    const local = { AGENT_SERVICE_URL: "http://localhost:3108/", DISCOVERY_SERVICE_URL: "http://localhost:3109" };
+    expect(upstreamBase("agent", local)).toBe("http://localhost:3108");
+    expect(upstreamBase("discovery", local)).toBe("http://localhost:3109");
+    expect(upstreamBase("agent", {})).toBe("");
   });
 });
 
