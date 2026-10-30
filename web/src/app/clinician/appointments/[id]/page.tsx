@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { FeesForm } from "@/features/appointments/fees-form";
 import { ConsultPanel } from "@/features/consult/consult-panel";
 import { formatOffset, speakerTurns } from "@/features/consult/transcript";
+import { ClinicalRecord } from "@/features/review/clinical-record";
 import { VitalsForm } from "@/features/consult/vitals-form";
 import { SectionCard } from "@/features/profile/sections";
 import { useStatusChange } from "@/features/staff/appointment-actions";
@@ -212,6 +213,14 @@ function ConsultView({ a, userId }: { a: AppointmentWithRefs; userId: string }) 
                     <dd>{visitTypeLabel(a.visit_type)}</dd>
                   </dl>
                 )}
+              </SectionCard>
+
+              <SectionCard
+                id="record"
+                title="Clinical record (AI drafted, clinician approved)"
+                description="The documentation agent drafts facts and key points from approved transcripts. Only what a clinician approves is part of the record."
+              >
+                <ClinicalRecord appointment={a} clinicianId={a.clinician_id} />
               </SectionCard>
 
               <SectionCard id="vitals" title="Vitals">
