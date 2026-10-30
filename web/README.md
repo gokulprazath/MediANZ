@@ -136,12 +136,33 @@ Chromium is not the build Playwright pins, set `PW_CHROMIUM_PATH` to its binary.
 
 ## Deploying to Vercel
 
-1. Import the repository and set the **root directory** to `web`.
-2. Set the environment variables above for Production (and Preview). For a real
-   deployment use `NEXT_PUBLIC_DATA_MODE=live`.
+One Vercel project runs everything (`vercel.json` at the repo root, services mode):
+
+| Part | What it is | Reachable |
+| --- | --- | --- |
+| `web` (service, `web/`) | This Next.js app | Public: every path |
+| `backend` (service, repo root) | `vercel_backend:app`: the agent at `/agent` and discovery at `/discovery`, with the gateway and the seven MCP servers in the same process (`src/healthmcp/backend.py`) | Internal only: `web` reaches it over the binding `BACKEND_URL` |
+| `consult-worker` (daemon) | `Dockerfile.worker`: the consult-notes loop | No traffic; Production deployments only (daemons are in beta) |
+
+1. Import the repository with the **repo root** as the project root (not `web`).
+2. Environment variables (Production): everything in the root `.env.example` and in
+   `web/.env.example`, with `NEXT_PUBLIC_DATA_MODE=live`. Do **not** set
+   `BACKEND_URL` (Vercel injects it), `AGENT_SERVICE_URL` or `DISCOVERY_SERVICE_URL`.
+   `DATABASE_URL` must be the Supabase **pooler** connection string (Connect, then
+   Transaction or Session pooler): the direct `db.<ref>.supabase.co` host is IPv6
+   only and Vercel connects over IPv4. Suggested: `DB_POOL_MIN_SIZE=0`,
+   `DB_POOL_MAX_SIZE=3`.
 3. In Supabase Auth settings, add the deployment URL to the redirect URLs
    (`https://<your-domain>/auth/callback`) so email links work.
 4. Restrict the Google Maps key to the deployment's domain.
+5. Check: sign in at `https://<your-domain>/login?demo`, ask the assistant something,
+   and record a short consult (the worker drafts notes about a minute after approval).
+
+`vercel dev` runs both services locally (not the daemon: run
+`docker build -f Dockerfile.worker -t medianz-worker . && docker run --env-file .env medianz-worker`,
+or `make consult-worker`). Without Vercel, the services still run separately
+(`make servers`, `make gateway`, `make agent`, the discovery API) and the proxy uses
+`AGENT_SERVICE_URL` and `DISCOVERY_SERVICE_URL`.
 
 Mock mode's in-memory database is per server instance: on Vercel's serverless
 functions each instance has its own copy and it is lost when the instance

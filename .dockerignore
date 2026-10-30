@@ -1,0 +1,20 @@
+# Build context for Dockerfile.worker: only pyproject.toml, uv.lock, README.md,
+# src/ and config/ are needed. Never send secrets or local environments.
+.env
+.env.*
+!.env.example
+**/.env.local
+.git
+.venv
+venv
+web
+tests
+supabase
+docs
+logs
+scripts
+**/__pycache__
+.mypy_cache
+.pytest_cache
+.ruff_cache
+*.log

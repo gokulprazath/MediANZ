@@ -254,3 +254,8 @@ New decisions are appended; old decisions are not silently rewritten.
 - Insights safety net: when its answer says the record doesn't answer the question and it prepared no GP
   query, the service prepares one in the patient's own words for the clinician of the most recent completed
   visit (still sent only on the patient's approval). Leaked model reasoning (`<think>`) is stripped from answers.
+- Vercel (services mode, `vercel.json`): one public service `web` and one internal Python service `backend`
+  (`vercel_backend:app`, `src/healthmcp/backend.py`) that mounts the agent at `/agent` and discovery at
+  `/discovery`; the gateway and the seven MCP servers run in the same process over in-process ASGI
+  transports (same tokens, allowlist, mode checks and rate limits), with one shared pool. `web` binds to it as
+  `BACKEND_URL`. The consult worker is a daemon (`Dockerfile.worker`). Locally the services stay separate.
